@@ -57,6 +57,9 @@ export interface Order {
   total: number;
   payment_method: 'card' | 'paypal' | 'venmo';
   estimated_delivery: string;
+  staff_id?: string;
+  driver_id?: string;
+  delivered_at?: string;
   created_at: string;
 }
 
@@ -98,6 +101,9 @@ export interface StaffMember {
   username: string;
   role: 'support' | 'manager' | 'admin';
   date_added: string;
+  password_hash?: string;
+  first_time_login?: boolean;
+  email?: string;
 }
 
 export interface Driver {
