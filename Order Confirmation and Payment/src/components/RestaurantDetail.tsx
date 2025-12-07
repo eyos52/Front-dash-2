@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
 import { ImageWithFallback } from './figma/ImageWithFallback';
+import { useMenuItems } from '../lib/utils/hooks';
+import { Loader2 } from 'lucide-react';
 import { 
   ArrowLeft, 
   Star, 
@@ -28,6 +30,7 @@ interface MenuItem {
 
 interface Restaurant {
   id: number;
+  supabaseId?: string; // Supabase UUID for fetching menu items
   name: string;
   rating: number;
   deliveryTime: string;
@@ -78,6 +81,22 @@ export function RestaurantDetail({
   getTotalItems
 }: RestaurantDetailProps) {
   const [selectedCategory, setSelectedCategory] = useState('featured');
+  
+  // Fetch menu items from Supabase
+  const { menuItems: supabaseMenuItems, loading: menuLoading, error: menuError } = useMenuItems(restaurant.supabaseId || null);
+
+  // Debug logging
+  useEffect(() => {
+    if (restaurant.supabaseId) {
+      console.log('Fetching menu items for restaurant:', restaurant.supabaseId);
+    } else {
+      console.warn('No supabaseId found for restaurant:', restaurant.name);
+    }
+  }, [restaurant.supabaseId, restaurant.name]);
+
+  useEffect(() => {
+    console.log('Menu items loaded:', supabaseMenuItems.length, supabaseMenuItems);
+  }, [supabaseMenuItems]);
 
   // Check if restaurant is currently open
   const isRestaurantOpen = (): boolean => {
@@ -101,344 +120,73 @@ export function RestaurantDetail({
     return currentTime >= openingTime && currentTime <= closingTime;
   };
 
-  // Generate menu based on store type
-  const getMenuForStore = () => {
-    const storeType = restaurant.category.toLowerCase();
-    
-    // Restaurant menus
-    if (restaurant.id <= 10) {
-      return [
-        {
-          id: 1,
-          name: restaurant.name === "Tony's Italian Bistro" ? "Margherita Pizza" : 
-               restaurant.name === "Burger Palace" ? "Classic Burger" :
-               restaurant.name === "Sakura Sushi" ? "California Roll" :
-               restaurant.name === "Taco Fiesta" ? "Beef Tacos" :
-               restaurant.name === "Spice Garden" ? "Butter Chicken" :
-               restaurant.name === "Golden Dragon" ? "Kung Pao Chicken" :
-               restaurant.name === "Bangkok Street" ? "Pad Thai" : "House Special",
-          description: "Our signature dish made with the finest ingredients",
-          price: 18.99,
-          image: restaurant.image,
-          category: 'featured',
-          isPopular: true
-        },
-        {
-          id: 2,
-          name: restaurant.name === "Tony's Italian Bistro" ? "Caesar Salad" : 
-               restaurant.name === "Burger Palace" ? "Double Burger" :
-               restaurant.name === "Sakura Sushi" ? "Spicy Tuna Roll" :
-               restaurant.name === "Taco Fiesta" ? "Chicken Quesadilla" :
-               restaurant.name === "Spice Garden" ? "Chicken Curry" :
-               restaurant.name === "Golden Dragon" ? "Sweet & Sour Pork" :
-               restaurant.name === "Bangkok Street" ? "Green Curry" : "Premium Special",
-          description: "Fresh and delicious, perfect for sharing",
-          price: 12.99,
-          image: restaurant.image,
-          category: 'featured',
-          isPopular: true
-        },
-        {
-          id: 3,
-          name: restaurant.name === "Tony's Italian Bistro" ? "Garlic Bread" : 
-               restaurant.name === "Burger Palace" ? "Cheese Burger Jr" :
-               restaurant.name === "Sakura Sushi" ? "Salmon Roll" :
-               restaurant.name === "Taco Fiesta" ? "Guacamole & Chips" :
-               restaurant.name === "Spice Garden" ? "Samosas" :
-               restaurant.name === "Golden Dragon" ? "Spring Rolls" :
-               restaurant.name === "Bangkok Street" ? "Tom Yum Soup" : "Appetizer Special",
-          description: "Perfect start to your meal",
-          price: 6.99,
-          image: restaurant.image,
-          category: 'appetizers'
-        }
-      ];
+  // Map Supabase menu items to component format
+  const mappedMenuItems: MenuItem[] = useMemo(() => {
+    if (supabaseMenuItems.length > 0) {
+      return supabaseMenuItems.map((item, index) => ({
+        id: index + 1, // Use index for component compatibility
+        name: item.name || 'Menu Item',
+        description: item.description || '',
+        price: item.price || 0,
+        image: item.image_url || restaurant.image,
+        category: item.category || 'featured',
+        isPopular: false // You can add a field for this in your database if needed
+      }));
     }
-    
-    // Grocery store items
-    if (restaurant.id >= 101 && restaurant.id <= 200) {
-      return [
-        {
-          id: 1,
-          name: "Fresh Organic Bananas",
-          description: "Premium organic bananas, perfect for snacking",
-          price: 3.99,
-          image: restaurant.image,
-          category: 'featured',
-          isPopular: true
-        },
-        {
-          id: 2,
-          name: "Farm Fresh Eggs",
-          description: "Cage-free eggs from local farms",
-          price: 5.49,
-          image: restaurant.image,
-          category: 'featured',
-          isPopular: true
-        },
-        {
-          id: 3,
-          name: "Artisan Bread",
-          description: "Freshly baked sourdough bread",
-          price: 4.99,
-          image: restaurant.image,
-          category: 'bakery'
-        },
-        {
-          id: 4,
-          name: "Greek Yogurt",
-          description: "Creamy, protein-rich Greek yogurt",
-          price: 6.99,
-          image: restaurant.image,
-          category: 'dairy'
-        },
-        {
-          id: 5,
-          name: "Organic Spinach",
-          description: "Fresh baby spinach leaves",
-          price: 3.49,
-          image: restaurant.image,
-          category: 'produce'
-        },
-        {
-          id: 6,
-          name: "Pasta & Sauce Combo",
-          description: "Premium pasta with marinara sauce",
-          price: 8.99,
-          image: restaurant.image,
-          category: 'pantry'
-        }
-      ];
-    }
-    
-    // Retail store items
-    if (restaurant.id >= 201 && restaurant.id <= 300) {
-      return [
-        {
-          id: 1,
-          name: "Designer T-Shirt",
-          description: "Premium cotton t-shirt with modern fit",
-          price: 29.99,
-          image: restaurant.image,
-          category: 'featured',
-          isPopular: true
-        },
-        {
-          id: 2,
-          name: "Wireless Headphones",
-          description: "High-quality wireless headphones with noise cancellation",
-          price: 199.99,
-          image: restaurant.image,
-          category: 'featured',
-          isPopular: true
-        },
-        {
-          id: 3,
-          name: "Skincare Set",
-          description: "Complete skincare routine in one package",
-          price: 89.99,
-          image: restaurant.image,
-          category: 'beauty'
-        },
-        {
-          id: 4,
-          name: "Smartphone Case",
-          description: "Protective case with wireless charging support",
-          price: 24.99,
-          image: restaurant.image,
-          category: 'accessories'
-        },
-        {
-          id: 5,
-          name: "Home Diffuser",
-          description: "Aromatherapy diffuser with essential oils",
-          price: 49.99,
-          image: restaurant.image,
-          category: 'home'
-        },
-        {
-          id: 6,
-          name: "Fitness Tracker",
-          description: "Smart fitness tracker with heart rate monitor",
-          price: 149.99,
-          image: restaurant.image,
-          category: 'electronics'
-        }
-      ];
-    }
-    
-    // Alcohol store items
-    if (restaurant.id >= 301 && restaurant.id <= 400) {
-      return [
-        {
-          id: 1,
-          name: "Craft IPA 6-Pack",
-          description: "Local brewery's signature IPA",
-          price: 12.99,
-          image: restaurant.image,
-          category: 'featured',
-          isPopular: true
-        },
-        {
-          id: 2,
-          name: "Premium Red Wine",
-          description: "Full-bodied Cabernet Sauvignon",
-          price: 24.99,
-          image: restaurant.image,
-          category: 'featured',
-          isPopular: true
-        },
-        {
-          id: 3,
-          name: "Artisan Gin",
-          description: "Small-batch botanical gin",
-          price: 39.99,
-          image: restaurant.image,
-          category: 'spirits'
-        },
-        {
-          id: 4,
-          name: "Champagne",
-          description: "Sparkling wine for special occasions",
-          price: 89.99,
-          image: restaurant.image,
-          category: 'wine'
-        },
-        {
-          id: 5,
-          name: "Local Lager",
-          description: "Crisp and refreshing local lager",
-          price: 8.99,
-          image: restaurant.image,
-          category: 'beer'
-        },
-        {
-          id: 6,
-          name: "Whiskey Flight",
-          description: "Selection of premium whiskeys",
-          price: 45.99,
-          image: restaurant.image,
-          category: 'spirits'
-        }
-      ];
-    }
-    
-    // Coffee shop items
-    if (restaurant.id >= 401) {
-      return [
-        {
-          id: 1,
-          name: "Signature Latte",
-          description: "House blend espresso with steamed milk",
-          price: 4.99,
-          image: restaurant.image,
-          category: 'featured',
-          isPopular: true
-        },
-        {
-          id: 2,
-          name: "Artisan Cold Brew",
-          description: "Smooth, cold-brewed coffee served over ice",
-          price: 3.99,
-          image: restaurant.image,
-          category: 'featured',
-          isPopular: true
-        },
-        {
-          id: 3,
-          name: "Fresh Croissant",
-          description: "Buttery, flaky croissant baked daily",
-          price: 2.99,
-          image: restaurant.image,
-          category: 'pastries'
-        },
-        {
-          id: 4,
-          name: "Herbal Tea Blend",
-          description: "Calming chamomile and lavender tea",
-          price: 3.49,
-          image: restaurant.image,
-          category: 'teas'
-        },
-        {
-          id: 5,
-          name: "Avocado Toast",
-          description: "Fresh avocado on multigrain bread",
-          price: 8.99,
-          image: restaurant.image,
-          category: 'food'
-        },
-        {
-          id: 6,
-          name: "Coffee Beans (1lb)",
-          description: "Take home our signature roast",
-          price: 16.99,
-          image: restaurant.image,
-          category: 'retail'
-        }
-      ];
-    }
-    
     return [];
-  };
+  }, [supabaseMenuItems, restaurant.image]);
 
-  const menuItems = getMenuForStore();
+  // Use menu items from database only
+  const menuItems = mappedMenuItems;
 
-  // Dynamic categories based on store type
+  // Dynamic categories based on actual menu items from database
   const getCategoriesForStore = () => {
-    if (restaurant.id <= 10) {
-      // Restaurant categories
-      return [
-        { id: 'featured', name: 'Featured Items', count: menuItems.filter(item => item.category === 'featured').length },
-        { id: 'appetizers', name: 'Appetizers', count: menuItems.filter(item => item.category === 'appetizers').length },
-        { id: 'mains', name: 'Main Dishes', count: menuItems.filter(item => item.category === 'mains').length },
-        { id: 'sides', name: 'Sides', count: menuItems.filter(item => item.category === 'sides').length },
-        { id: 'desserts', name: 'Desserts', count: menuItems.filter(item => item.category === 'desserts').length }
-      ];
-    } else if (restaurant.id >= 101 && restaurant.id <= 200) {
-      // Grocery categories
-      return [
-        { id: 'featured', name: 'Featured', count: menuItems.filter(item => item.category === 'featured').length },
-        { id: 'produce', name: 'Fresh Produce', count: menuItems.filter(item => item.category === 'produce').length },
-        { id: 'dairy', name: 'Dairy & Eggs', count: menuItems.filter(item => item.category === 'dairy').length },
-        { id: 'bakery', name: 'Bakery', count: menuItems.filter(item => item.category === 'bakery').length },
-        { id: 'pantry', name: 'Pantry Staples', count: menuItems.filter(item => item.category === 'pantry').length }
-      ];
-    } else if (restaurant.id >= 201 && restaurant.id <= 300) {
-      // Retail categories
-      return [
-        { id: 'featured', name: 'Featured', count: menuItems.filter(item => item.category === 'featured').length },
-        { id: 'electronics', name: 'Electronics', count: menuItems.filter(item => item.category === 'electronics').length },
-        { id: 'beauty', name: 'Beauty & Health', count: menuItems.filter(item => item.category === 'beauty').length },
-        { id: 'home', name: 'Home & Garden', count: menuItems.filter(item => item.category === 'home').length },
-        { id: 'accessories', name: 'Accessories', count: menuItems.filter(item => item.category === 'accessories').length }
-      ];
-    } else if (restaurant.id >= 301 && restaurant.id <= 400) {
-      // Alcohol categories
-      return [
-        { id: 'featured', name: 'Featured', count: menuItems.filter(item => item.category === 'featured').length },
-        { id: 'beer', name: 'Beer & Cider', count: menuItems.filter(item => item.category === 'beer').length },
-        { id: 'wine', name: 'Wine', count: menuItems.filter(item => item.category === 'wine').length },
-        { id: 'spirits', name: 'Spirits', count: menuItems.filter(item => item.category === 'spirits').length }
-      ];
-    } else {
-      // Coffee shop categories
-      return [
-        { id: 'featured', name: 'Featured', count: menuItems.filter(item => item.category === 'featured').length },
-        { id: 'coffee', name: 'Coffee & Espresso', count: menuItems.filter(item => item.category === 'coffee').length },
-        { id: 'teas', name: 'Teas', count: menuItems.filter(item => item.category === 'teas').length },
-        { id: 'food', name: 'Food', count: menuItems.filter(item => item.category === 'food').length },
-        { id: 'pastries', name: 'Pastries', count: menuItems.filter(item => item.category === 'pastries').length },
-        { id: 'retail', name: 'Retail', count: menuItems.filter(item => item.category === 'retail').length }
-      ];
-    }
+    // Get all unique categories from menu items
+    const uniqueCategories = Array.from(new Set(menuItems.map(item => item.category || 'featured')));
+    
+    // Create category objects with counts
+    return uniqueCategories.map(category => {
+      const count = menuItems.filter(item => (item.category || 'featured') === category).length;
+      // Format category name (capitalize first letter, add spaces)
+      const formattedName = category
+        .split(/(?=[A-Z])|[-_]/)
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
+      
+      return {
+        id: category,
+        name: formattedName,
+        count: count
+      };
+    });
   };
 
   const categories = getCategoriesForStore().filter(cat => cat.count > 0);
+  
+  // Set default category to first available category when menu items load
+  useEffect(() => {
+    if (categories.length > 0) {
+      // If selected category doesn't exist or has no items, switch to first available
+      const selectedCategoryExists = categories.find(c => c.id === selectedCategory && c.count > 0);
+      if (!selectedCategoryExists) {
+        setSelectedCategory(categories[0].id);
+      }
+    }
+  }, [categories.length]); // Only run when categories change
 
-  const filteredItems = selectedCategory === 'featured' 
-    ? menuItems.filter(item => item.category === 'featured')
-    : menuItems.filter(item => item.category === selectedCategory);
+  // Filter items based on selected category
+  // If 'featured' is selected but no items have that category, show all items
+  const filteredItems = useMemo(() => {
+    if (menuItems.length === 0) return [];
+    
+    if (selectedCategory === 'featured') {
+      const featuredItems = menuItems.filter(item => (item.category || 'featured') === 'featured');
+      // If no items have 'featured' category, show all items
+      return featuredItems.length > 0 ? featuredItems : menuItems;
+    }
+    
+    return menuItems.filter(item => (item.category || 'featured') === selectedCategory);
+  }, [menuItems, selectedCategory]);
 
   const handleAddToCart = (item: MenuItem) => {
     // Check if restaurant is open before allowing add to cart
@@ -587,8 +335,19 @@ export function RestaurantDetail({
             </div>
 
             {/* Menu Items Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {filteredItems.map((item) => (
+            {menuLoading ? (
+              <div className="text-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin mx-auto text-orange-600 mb-4" />
+                <p className="text-gray-500 text-lg">Loading menu items...</p>
+              </div>
+            ) : menuError ? (
+              <div className="text-center py-12">
+                <p className="text-red-500 text-lg mb-2">Error loading menu items</p>
+                <p className="text-gray-500 text-sm">{menuError}</p>
+              </div>
+            ) : filteredItems.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {filteredItems.map((item) => (
                 <Card key={item.id} className="overflow-hidden hover:shadow-lg transition-shadow">
                   <div className="flex">
                     <div className="flex-1 p-4">
@@ -647,8 +406,13 @@ export function RestaurantDetail({
                     </div>
                   </div>
                 </Card>
-              ))}
-            </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-12">
+                <p className="text-gray-500 text-lg">No menu items available for this restaurant.</p>
+              </div>
+            )}
           </main>
         </div>
 

@@ -64,108 +64,11 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
   const [newStaffForm, setNewStaffForm] = useState({ firstName: '', lastName: '', role: 'Support' });
   const [newDriverForm, setNewDriverForm] = useState({ firstName: '', lastName: '' });
 
-  // Mock data
-  const [registrations, setRegistrations] = useState<RestaurantRegistration[]>([
-    {
-      id: '1111111',
-      restaurantName: "Jim's Hotdogs",
-      contactInfo: 'j@gmail.com',
-      submissionDate: '06/11',
-      status: 'Approved',
-      decisionDate: '06/19'
-    },
-    {
-      id: '232323',
-      restaurantName: "Tim's Pizza",
-      contactInfo: 't@gmail.com',
-      submissionDate: '06/09',
-      status: 'Rejected',
-      decisionDate: '06/25'
-    },
-    {
-      id: '344444',
-      restaurantName: "Mario's Italian Kitchen",
-      contactInfo: 'mario@kitchen.com',
-      submissionDate: '07/20',
-      status: 'Pending',
-      decisionDate: ''
-    },
-    {
-      id: '455555',
-      restaurantName: "Dragon Sushi",
-      contactInfo: 'info@dragonsushi.com',
-      submissionDate: '07/22',
-      status: 'Pending',
-      decisionDate: ''
-    }
-  ]);
-
-  const [withdrawalRequests, setWithdrawalRequests] = useState([
-    {
-      id: '1111112',
-      restaurantName: "Tony's Bistro",
-      contactInfo: 'tony@gmail.com',
-      submissionDate: '07/15',
-      status: 'Pending',
-      decisionDate: ''
-    },
-    {
-      id: '666666',
-      restaurantName: "Burger King Downtown",
-      contactInfo: 'manager@bkdowntown.com',
-      submissionDate: '07/18',
-      status: 'Pending',
-      decisionDate: ''
-    }
-  ]);
-
-  const [drivers, setDrivers] = useState<Driver[]>([
-    {
-      firstName: 'Colby',
-      lastName: 'Papanatuski',
-      username: '@papanak1',
-      startDate: '06/11',
-      autoPWD: '********'
-    },
-    {
-      firstName: 'Jonathan',
-      lastName: 'Pyne',
-      username: '@jonathan1',
-      startDate: '06/09',
-      autoPWD: '********'
-    }
-  ]);
-
-  const [staffMembers, setStaffMembers] = useState<StaffMember[]>([
-    {
-      id: '1',
-      name: 'Alice Johnson',
-      username: 'alice01',
-      role: 'Manager',
-      dateAdded: '2024-01-15'
-    },
-    {
-      id: '2',
-      name: 'Bob Smith',
-      username: 'bob02',
-      role: 'Support',
-      dateAdded: '2024-02-20'  
-    },
-    {
-      id: '3',
-      name: 'Carol Davis',
-      username: 'carol03',
-      role: 'Admin',
-      dateAdded: '2024-03-10'
-    },
-    {
-      id: '4',
-      name: 'David Wilson',
-      username: 'david04',
-      role: 'Support',
-      dateAdded: '2024-04-05'
-    }
-  ]);
+  // Data will be loaded from database
+  const [registrations, setRegistrations] = useState<RestaurantRegistration[]>([]);
+  const [withdrawalRequests, setWithdrawalRequests] = useState([]);
+  const [drivers, setDrivers] = useState<Driver[]>([]);
+  const [staffMembers, setStaffMembers] = useState<StaffMember[]>([]);
 
   // Action handlers
   const handleApproveRegistration = (id: string) => {
@@ -349,50 +252,58 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredItems().map((registration: any) => (
-                      <TableRow key={registration.id}>
-                        <TableCell>{registration.id}</TableCell>
-                        <TableCell>{registration.restaurantName}</TableCell>
-                        <TableCell>{registration.contactInfo}</TableCell>
-                        <TableCell>{registration.submissionDate}</TableCell>
-                        <TableCell>
-                          <Badge variant={
-                            registration.status === 'Approved' ? 'default' :
-                            registration.status === 'Rejected' ? 'destructive' : 'secondary'
-                          }>
-                            {registration.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Button size="sm" variant="ghost" onClick={() => toast.info('Document viewer would open here')}>
-                            <FileText className="h-4 w-4 text-gray-600" />
-                          </Button>
-                        </TableCell>
-                        <TableCell>{registration.decisionDate}</TableCell>
-                        <TableCell>
-                          {registration.status === 'Pending' && (
-                            <div className="flex gap-1">
-                              <Button 
-                                size="sm" 
-                                variant="outline"
-                                onClick={() => handleApproveRegistration(registration.id)}
-                                className="text-green-600 hover:text-green-700"
-                              >
-                                <Check className="h-4 w-4" />
-                              </Button>
-                              <Button 
-                                size="sm" 
-                                variant="outline"
-                                onClick={() => handleRejectRegistration(registration.id)}
-                                className="text-red-600 hover:text-red-700"
-                              >
-                                <X className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          )}
+                    {filteredItems().length > 0 ? (
+                      filteredItems().map((registration: any) => (
+                        <TableRow key={registration.id}>
+                          <TableCell>{registration.id}</TableCell>
+                          <TableCell>{registration.restaurantName}</TableCell>
+                          <TableCell>{registration.contactInfo}</TableCell>
+                          <TableCell>{registration.submissionDate}</TableCell>
+                          <TableCell>
+                            <Badge variant={
+                              registration.status === 'Approved' ? 'default' :
+                              registration.status === 'Rejected' ? 'destructive' : 'secondary'
+                            }>
+                              {registration.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Button size="sm" variant="ghost" onClick={() => toast.info('Document viewer would open here')}>
+                              <FileText className="h-4 w-4 text-gray-600" />
+                            </Button>
+                          </TableCell>
+                          <TableCell>{registration.decisionDate}</TableCell>
+                          <TableCell>
+                            {registration.status === 'Pending' && (
+                              <div className="flex gap-1">
+                                <Button 
+                                  size="sm" 
+                                  variant="outline"
+                                  onClick={() => handleApproveRegistration(registration.id)}
+                                  className="text-green-600 hover:text-green-700"
+                                >
+                                  <Check className="h-4 w-4" />
+                                </Button>
+                                <Button 
+                                  size="sm" 
+                                  variant="outline"
+                                  onClick={() => handleRejectRegistration(registration.id)}
+                                  className="text-red-600 hover:text-red-700"
+                                >
+                                  <X className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={8} className="text-center text-gray-500 py-8">
+                          No registrations found. Data will be loaded from the database.
                         </TableCell>
                       </TableRow>
-                    ))}
+                    )}
                   </TableBody>
                 </Table>
               </Tabs>
@@ -431,36 +342,44 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredItems().map((request: any) => (
-                    <TableRow key={request.id}>
-                      <TableCell>{request.id}</TableCell>
-                      <TableCell>{request.restaurantName}</TableCell>
-                      <TableCell>{request.contactInfo}</TableCell>
-                      <TableCell>{request.submissionDate}</TableCell>
-                      <TableCell>
-                        <Badge variant="secondary">{request.status}</Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex gap-2">
-                          <Button 
-                            size="sm" 
-                            variant="outline"
-                            onClick={() => handleApproveWithdrawal(request.id)}
-                            className="text-green-600 hover:text-green-700"
-                          >
-                            Approve
-                          </Button>
-                          <Button 
-                            size="sm" 
-                            variant="destructive"
-                            onClick={() => handleRejectWithdrawal(request.id)}
-                          >
-                            Reject
-                          </Button>
-                        </div>
+                  {filteredItems().length > 0 ? (
+                    filteredItems().map((request: any) => (
+                      <TableRow key={request.id}>
+                        <TableCell>{request.id}</TableCell>
+                        <TableCell>{request.restaurantName}</TableCell>
+                        <TableCell>{request.contactInfo}</TableCell>
+                        <TableCell>{request.submissionDate}</TableCell>
+                        <TableCell>
+                          <Badge variant="secondary">{request.status}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex gap-2">
+                            <Button 
+                              size="sm" 
+                              variant="outline"
+                              onClick={() => handleApproveWithdrawal(request.id)}
+                              className="text-green-600 hover:text-green-700"
+                            >
+                              Approve
+                            </Button>
+                            <Button 
+                              size="sm" 
+                              variant="destructive"
+                              onClick={() => handleRejectWithdrawal(request.id)}
+                            >
+                              Reject
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center text-gray-500 py-8">
+                        No withdrawal requests found. Data will be loaded from the database.
                       </TableCell>
                     </TableRow>
-                  ))}
+                  )}
                 </TableBody>
               </Table>
             </div>
@@ -501,23 +420,31 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredItems().map((staff: any) => (
-                    <TableRow key={staff.id}>
-                      <TableCell>{staff.name}</TableCell>
-                      <TableCell>{staff.username}</TableCell>
-                      <TableCell>{staff.role}</TableCell>
-                      <TableCell>{staff.dateAdded}</TableCell>
-                      <TableCell>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={() => handleDelete(staff, 'staff')}
-                        >
-                          <UserX className="h-4 w-4" />
-                        </Button>
+                  {filteredItems().length > 0 ? (
+                    filteredItems().map((staff: any) => (
+                      <TableRow key={staff.id}>
+                        <TableCell>{staff.name}</TableCell>
+                        <TableCell>{staff.username}</TableCell>
+                        <TableCell>{staff.role}</TableCell>
+                        <TableCell>{staff.dateAdded}</TableCell>
+                        <TableCell>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => handleDelete(staff, 'staff')}
+                          >
+                            <UserX className="h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-gray-500 py-8">
+                        No staff members found. Data will be loaded from the database.
                       </TableCell>
                     </TableRow>
-                  ))}
+                  )}
                 </TableBody>
               </Table>
             </div>
@@ -558,29 +485,37 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredItems().map((driver: any, index) => (
-                    <TableRow key={index}>
-                      <TableCell>{driver.firstName}</TableCell>
-                      <TableCell>{driver.lastName}</TableCell>
-                      <TableCell>{driver.username}</TableCell>
-                      <TableCell>{driver.startDate}</TableCell>
-                      <TableCell>{driver.autoPWD}</TableCell>
-                      <TableCell>
-                        <div className="flex gap-2">
-                          <Button size="sm" variant="outline">
-                            <FileText className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={() => handleDelete(driver, 'driver')}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
+                  {filteredItems().length > 0 ? (
+                    filteredItems().map((driver: any, index) => (
+                      <TableRow key={index}>
+                        <TableCell>{driver.firstName}</TableCell>
+                        <TableCell>{driver.lastName}</TableCell>
+                        <TableCell>{driver.username}</TableCell>
+                        <TableCell>{driver.startDate}</TableCell>
+                        <TableCell>{driver.autoPWD}</TableCell>
+                        <TableCell>
+                          <div className="flex gap-2">
+                            <Button size="sm" variant="outline">
+                              <FileText className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => handleDelete(driver, 'driver')}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center text-gray-500 py-8">
+                        No drivers found. Data will be loaded from the database.
                       </TableCell>
                     </TableRow>
-                  ))}
+                  )}
                 </TableBody>
               </Table>
             </div>

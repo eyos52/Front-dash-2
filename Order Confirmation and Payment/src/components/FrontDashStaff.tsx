@@ -39,85 +39,9 @@ export function FrontDashStaff({ onNavigateHome }: FrontDashStaffProps) {
   const [selectedOrder, setSelectedOrder] = useState<PendingOrder | null>(null);
   const [selectedDriverId, setSelectedDriverId] = useState<string>('');
 
-  // Mock data for pending orders
-  const [pendingOrders, setPendingOrders] = useState<PendingOrder[]>([
-    {
-      id: '#10231',
-      restaurantName: 'Foodtastic',
-      price: 20.26,
-      orderTime: 'Ordered: 5:20pm',
-      status: 'Queued',
-      customer: 'John Smith',
-      pickupAddress: 'Foodtastic Restaurant',
-      dropoffAddress: '123 Main St, Downtown',
-      eta: '15m'
-    },
-    {
-      id: '#10232',
-      restaurantName: 'Foodtastic',
-      price: 67.00,
-      orderTime: 'Ordered: 5:23pm',
-      status: 'Pending',
-      customer: 'Sarah Johnson',
-      pickupAddress: 'Foodtastic Restaurant',
-      dropoffAddress: '456 Oak Ave, Midtown',
-      eta: '18m'
-    },
-    {
-      id: '#10233',
-      restaurantName: 'BurgerLo',
-      price: 69.82,
-      orderTime: 'Ordered: 5:23pm',
-      status: 'Pending',
-      customer: 'Mike Davis',
-      pickupAddress: 'BurgerLo',
-      dropoffAddress: '789 Pine St, Uptown',
-      eta: '22m'
-    },
-    {
-      id: '#25367',
-      restaurantName: 'BurgerLo',
-      price: 17.38,
-      orderTime: 'Ordered: 5:24pm',
-      status: 'Queued',
-      customer: 'Lisa Wilson',
-      pickupAddress: 'BurgerLo',
-      dropoffAddress: '590 Elm Street',
-      eta: '12m'
-    }
-  ]);
-
-  // Mock data for drivers
-  const [drivers] = useState<Driver[]>([
-    {
-      id: '1',
-      name: 'Ananiah',
-      distance: 0.8,
-      isAvailable: true,
-      currentLocation: 'Downtown District'
-    },
-    {
-      id: '2',
-      name: 'Jessica',
-      distance: 3.2,
-      isAvailable: true,
-      currentLocation: 'Midtown Area'
-    },
-    {
-      id: '3',
-      name: 'David',
-      distance: 6.7,
-      isAvailable: false,
-      currentLocation: 'North Side'
-    },
-    {
-      id: '4',
-      name: 'Sam',
-      distance: 1.3,
-      isAvailable: true,
-      currentLocation: 'City Center'
-    }
-  ]);
+  // Data will be loaded from database
+  const [pendingOrders, setPendingOrders] = useState<PendingOrder[]>([]);
+  const [drivers] = useState<Driver[]>([]);
 
   const availableDrivers = drivers.filter(driver => driver.isAvailable);
   const queuedOrders = pendingOrders.filter(order => order.status === 'Queued');
@@ -197,23 +121,31 @@ export function FrontDashStaff({ onNavigateHome }: FrontDashStaffProps) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {pendingOrders.map((order) => (
-                <TableRow key={order.id}>
-                  <TableCell className="font-medium">{order.id}</TableCell>
-                  <TableCell>{order.restaurantName}</TableCell>
-                  <TableCell>${order.price.toFixed(2)}</TableCell>
-                  <TableCell>{order.orderTime}</TableCell>
-                  <TableCell>
-                    <Badge variant={
-                      order.status === 'Assigned' ? 'default' :
-                      order.status === 'Pending' ? 'secondary' :
-                      'outline'
-                    }>
-                      Status: {order.status}
-                    </Badge>
+              {pendingOrders.length > 0 ? (
+                pendingOrders.map((order) => (
+                  <TableRow key={order.id}>
+                    <TableCell className="font-medium">{order.id}</TableCell>
+                    <TableCell>{order.restaurantName}</TableCell>
+                    <TableCell>${order.price.toFixed(2)}</TableCell>
+                    <TableCell>{order.orderTime}</TableCell>
+                    <TableCell>
+                      <Badge variant={
+                        order.status === 'Assigned' ? 'default' :
+                        order.status === 'Pending' ? 'secondary' :
+                        'outline'
+                      }>
+                        Status: {order.status}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center text-gray-500 py-8">
+                    No pending orders found. Orders will be loaded from the database.
                   </TableCell>
                 </TableRow>
-              ))}
+              )}
             </TableBody>
           </Table>
         </div>
@@ -277,37 +209,43 @@ export function FrontDashStaff({ onNavigateHome }: FrontDashStaffProps) {
       {/* Driver Selection */}
       <Card>
         <CardContent className="p-6 border-4 border-gray-800">
-          <div className="space-y-4">
-            {drivers.map((driver) => (
-              <div 
-                key={driver.id}
-                className={`flex items-center justify-between p-3 rounded cursor-pointer border-2 ${
-                  selectedDriverId === driver.id 
-                    ? 'border-orange-500 bg-orange-50' 
-                    : 'border-transparent hover:bg-gray-50'
-                }`}
-                onClick={() => driver.isAvailable ? setSelectedDriverId(driver.id) : null}
-              >
-                <div className="flex items-center gap-4">
-                  <Avatar className="h-10 w-10 bg-gray-300">
-                    <AvatarFallback>
-                      {driver.name.charAt(0).toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                  <span className="font-medium">{driver.name}</span>
+          {drivers.length > 0 ? (
+            <div className="space-y-4">
+              {drivers.map((driver) => (
+                <div 
+                  key={driver.id}
+                  className={`flex items-center justify-between p-3 rounded cursor-pointer border-2 ${
+                    selectedDriverId === driver.id 
+                      ? 'border-orange-500 bg-orange-50' 
+                      : 'border-transparent hover:bg-gray-50'
+                  }`}
+                  onClick={() => driver.isAvailable ? setSelectedDriverId(driver.id) : null}
+                >
+                  <div className="flex items-center gap-4">
+                    <Avatar className="h-10 w-10 bg-gray-300">
+                      <AvatarFallback>
+                        {driver.name.charAt(0).toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
+                    <span className="font-medium">{driver.name}</span>
+                  </div>
+                  
+                  <div className="flex items-center gap-4">
+                    <Circle className="h-3 w-3 fill-gray-800" />
+                    <span>{driver.distance} Miles</span>
+                    <Circle className="h-3 w-3 fill-gray-800" />
+                    <span className={driver.isAvailable ? 'text-green-600' : 'text-red-600'}>
+                      {driver.isAvailable ? 'Available' : 'Not Available'}
+                    </span>
+                  </div>
                 </div>
-                
-                <div className="flex items-center gap-4">
-                  <Circle className="h-3 w-3 fill-gray-800" />
-                  <span>{driver.distance} Miles</span>
-                  <Circle className="h-3 w-3 fill-gray-800" />
-                  <span className={driver.isAvailable ? 'text-green-600' : 'text-red-600'}>
-                    {driver.isAvailable ? 'Available' : 'Not Available'}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-8 text-gray-500">
+              No drivers available. Driver data will be loaded from the database.
+            </div>
+          )}
         </CardContent>
       </Card>
 

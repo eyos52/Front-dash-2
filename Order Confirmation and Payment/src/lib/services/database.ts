@@ -1,16 +1,32 @@
-import { supabase, Restaurant, Order, OrderItem, RestaurantRegistration, StaffMember, Driver, WithdrawalRequest } from '../supabase';
+import { supabase, Restaurant, Order, OrderItem, RestaurantRegistration, StaffMember, Driver, WithdrawalRequest, MenuItem } from '../supabase';
 
 // ========== RESTAURANT OPERATIONS ==========
 
 export async function getRestaurants() {
+  // Fetch all restaurants - don't filter by status since that column may not exist
   const { data, error } = await supabase
     .from('restaurants')
     .select('*')
-    .eq('status', 'active')
     .order('name');
 
-  if (error) throw error;
-  return data as Restaurant[];
+  if (error) {
+    console.error('Supabase error details:', {
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      code: error.code
+    });
+    throw new Error(`Failed to fetch restaurants: ${error.message}${error.hint ? ` (${error.hint})` : ''}`);
+  }
+  
+  // Return all restaurants (filter by status only if the column exists)
+  const restaurants = (data || []).filter((r: any) => {
+    // If status column exists, only return active restaurants
+    // Otherwise, return all restaurants
+    return !r.hasOwnProperty('status') || r.status === 'active';
+  });
+  
+  return restaurants as Restaurant[];
 }
 
 export async function getRestaurantById(id: string) {
@@ -116,6 +132,49 @@ export async function updateOrderStatus(id: string, status: Order['status']) {
 
   if (error) throw error;
   return data as Order;
+}
+
+export async function getOrdersByRestaurant(restaurantId: string, status?: string) {
+  console.log('Fetching orders for restaurant_id:', restaurantId, 'status:', status);
+  
+  // Query orders by restaurant_id (text field like "001", "002", "003")
+  let query = supabase
+    .from('orders')
+    .select('*')
+    .eq('restaurant_id', restaurantId);
+  
+  // Filter by status if provided
+  if (status) {
+    if (status.toLowerCase() === 'completed') {
+      // Check for "Completed" (capitalized) as shown in the database
+      query = query.eq('status', 'Completed');
+    } else if (status.toLowerCase() === 'pending') {
+      // Check for "Pending" (capitalized) as shown in the database
+      query = query.eq('status', 'Pending');
+    } else {
+      query = query.eq('status', status);
+    }
+  }
+  // If no status filter, fetch all orders
+  
+  // Order by order_id descending (newest first) or created_at if it exists
+  query = query.order('order_id', { ascending: false });
+  
+  const { data, error } = await query;
+  
+  if (error) {
+    console.error('Supabase error fetching orders:', error);
+    console.error('Error details:', {
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      code: error.code
+    });
+    throw new Error(`Failed to fetch orders: ${error.message}`);
+  }
+  
+  console.log('Fetched orders:', data?.length || 0, data);
+  return (data || []) as Order[];
 }
 
 // ========== STAFF OPERATIONS ==========
@@ -246,5 +305,43 @@ export async function deleteWithdrawalRequest(id: string) {
     .eq('id', id);
 
   if (error) throw error;
+}
+
+// ========== MENU ITEM OPERATIONS ==========
+
+export async function getMenuItemsByRestaurant(restaurantId: string) {
+  console.log('Fetching menu items for restaurant_id:', restaurantId);
+  
+  const { data, error } = await supabase
+    .from('menu_items')
+    .select('*')
+    .eq('restaurant_id', restaurantId)
+    .order('name');
+
+  if (error) {
+    console.error('Supabase error fetching menu items:', error);
+    throw new Error(`Failed to fetch menu items: ${error.message}`);
+  }
+  
+  console.log('Fetched menu items:', data?.length || 0, data);
+  return (data || []) as MenuItem[];
+}
+
+export async function getRestaurantWithMenu(restaurantId: string) {
+  const { data, error } = await supabase
+    .from('restaurants')
+    .select(`
+      *,
+      menu_items (*)
+    `)
+    .eq('id', restaurantId)
+    .single();
+
+  if (error) {
+    console.error('Supabase error fetching restaurant with menu:', error);
+    throw new Error(`Failed to fetch restaurant: ${error.message}`);
+  }
+  
+  return data;
 }
 

@@ -4,6 +4,12 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://your-project.supabase.co';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'your-anon-key';
 
+// Log configuration (only in development)
+if (import.meta.env.DEV) {
+  console.log('Supabase URL:', supabaseUrl?.substring(0, 30) + '...');
+  console.log('Supabase Key configured:', !!supabaseAnonKey && supabaseAnonKey !== 'your-anon-key');
+}
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 // Database Types
@@ -16,48 +22,52 @@ export interface User {
 }
 
 export interface Restaurant {
-  id: string;
+  id?: string; // UUID if exists
+  restaurant_id?: string; // Text ID like "001", "002", "003" - primary key in your database
   name: string;
-  owner_id: string;
-  cuisine_type: string;
-  address: string;
-  city: string;
-  state: string;
-  zip_code: string;
-  phone: string;
-  email: string;
-  description: string;
-  opening_time: string;
-  closing_time: string;
-  rating: number;
-  delivery_time: string;
-  distance: string;
-  image_url: string;
+  owner_id?: string;
+  cuisine_type?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  zip_code?: string;
+  phone?: string;
+  email?: string;
+  description?: string;
+  opening_time?: string;
+  closing_time?: string;
+  operating_hours?: string; // Text field with operating hours like "Mon: 9:00 AM - 9:00 PM\nTue: 9:00 AM - 9:00 PM..."
+  rating?: number;
+  delivery_time?: string;
+  distance?: string;
+  image_url?: string;
   promo?: string;
-  status: 'active' | 'pending' | 'suspended';
-  created_at: string;
+  status?: 'active' | 'pending' | 'suspended';
+  created_at?: string;
 }
 
 export interface Order {
-  id: string;
-  customer_id: string;
-  restaurant_id: string;
-  order_number: string;
-  status: 'pending' | 'confirmed' | 'preparing' | 'ready' | 'out_for_delivery' | 'delivered' | 'cancelled';
-  delivery_address: string;
-  city: string;
-  state: string;
-  zip_code: string;
-  phone: string;
-  email: string;
-  subtotal: number;
-  delivery_fee: number;
-  service_charge: number;
-  tax: number;
-  total: number;
-  payment_method: 'card' | 'paypal' | 'venmo';
-  estimated_delivery: string;
-  created_at: string;
+  id?: string; // UUID if exists
+  order_id?: string; // Text ID like "FD0001", "FD0002" - primary key in your database
+  customer_id?: string;
+  restaurant_id: string; // Text ID like "001", "002", "003"
+  driver_id?: string; // Text ID like "D1", "D2" or null
+  order_number?: string;
+  status: 'Pending' | 'Completed' | 'pending' | 'confirmed' | 'preparing' | 'ready' | 'out_for_delivery' | 'delivered' | 'cancelled';
+  delivery_address?: string;
+  city?: string;
+  state?: string;
+  zip_code?: string;
+  phone?: string;
+  email?: string;
+  subtotal?: number;
+  delivery_fee?: number;
+  service_charge?: number;
+  tax?: number;
+  total?: number;
+  payment_method?: 'card' | 'paypal' | 'venmo';
+  estimated_delivery?: string;
+  created_at?: string;
 }
 
 export interface OrderItem {
@@ -118,5 +128,18 @@ export interface WithdrawalRequest {
   status: 'pending' | 'approved' | 'rejected';
   decision_date?: string;
   reviewed_by?: string;
+}
+
+export interface MenuItem {
+  id?: string; // UUID if exists
+  menu_item_id?: string; // Text ID like "01", "02" - primary key in your database
+  restaurant_id: string; // Text ID like "001", "002", "003" - links to restaurants.restaurant_id
+  name: string;
+  description?: string;
+  price: number;
+  image_url?: string;
+  category?: string;
+  is_available?: boolean;
+  created_at?: string;
 }
 

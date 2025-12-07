@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -11,6 +11,10 @@ import { Badge } from './ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { validateEmail, validatePhone, formatPhone } from './utils/validation';
+import { useMenuItems } from '../lib/utils/hooks';
+import { getRestaurants, getOrdersByRestaurant } from '../lib/services/database';
+import { Loader2 } from 'lucide-react';
+import { Order as SupabaseOrder } from '../lib/supabase';
 import { 
   Store, 
   Plus, 
@@ -36,7 +40,7 @@ interface MenuItem {
 
 interface Order {
   id: string;
-  status: 'Arrived' | 'In transit' | 'Preparing' | 'Ready';
+  status: 'Arrived' | 'In transit' | 'Preparing' | 'Ready' | 'Pending';
   date: string;
   time: string;
   customer: string;
@@ -73,9 +77,10 @@ interface RestaurantData {
 
 interface RestaurantInterfaceProps {
   onNavigateHome?: () => void;
+  restaurantId?: string; // Restaurant ID from login
 }
 
-export function RestaurantInterface({ onNavigateHome }: RestaurantInterfaceProps = {}) {
+export function RestaurantInterface({ onNavigateHome, restaurantId }: RestaurantInterfaceProps = {}) {
   const [activeSection, setActiveSection] = useState('orders');
   const [activeOrderTab, setActiveOrderTab] = useState('active');
   const [searchTerm, setSearchTerm] = useState('');
@@ -94,60 +99,272 @@ export function RestaurantInterface({ onNavigateHome }: RestaurantInterfaceProps
   });
   
   const [restaurant, setRestaurant] = useState<RestaurantData>({
-    name: "Tony's Italian Bistro",
-    address: '123 Main St, Downtown',
-    phone: '5551234567',
-    email: 'tony@tonys.com',
-    openingTime: '11:00 AM',
-    closingTime: '10:00 PM',
-    isRegistered: true,
-    registrationStatus: 'approved'
+    name: '',
+    address: '',
+    phone: '',
+    email: '',
+    openingTime: '',
+    closingTime: '',
+    isRegistered: false,
+    registrationStatus: 'pending'
   });
 
-  const [menuItems, setMenuItems] = useState<MenuItem[]>([
-    { id: 1, name: 'Margherita Pizza', price: 18.99, description: 'Fresh tomatoes, mozzarella, basil', availability: 'available' },
-    { id: 2, name: 'Caesar Salad', price: 12.99, description: 'Romaine lettuce, parmesan, croutons', availability: 'available' },
-    { id: 3, name: 'Garlic Bread', price: 6.99, description: 'Crispy bread with garlic butter', availability: 'unavailable' }
-  ]);
+  // Fetch menu items from database
+  const { menuItems: supabaseMenuItems, loading: menuLoading, error: menuError } = useMenuItems(restaurantId || null);
+  
+  // Helper function to parse operating_hours text field
+  const parseOperatingHours = (operatingHoursText: string | undefined): WeeklyHours => {
+    const defaultHours: WeeklyHours = {
+      monday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+      tuesday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+      wednesday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+      thursday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+      friday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+      saturday: { isOpen: true, openTime: '08:00', closeTime: '22:00' },
+      sunday: { isOpen: true, openTime: '08:00', closeTime: '22:00' }
+    };
 
-  const [orders, setOrders] = useState<Order[]>([
-    {
-      id: '1111111',
-      status: 'Arrived',
-      date: '07/30',
-      time: '2:24 pm',
-      customer: 'Alex',
-      deliverer: 'Jim',
-      total: '$15'
-    },
-    {
-      id: '1111111',
-      status: 'In transit',
-      date: '07/30',
-      time: '2:24 pm',
-      customer: 'Conor',
-      deliverer: 'Joseph',
-      total: '$22'
-    },
-    {
-      id: '1111111',
-      status: 'Preparing',
-      date: '07/30',
-      time: '2:24 pm',
-      customer: 'John',
-      deliverer: '',
-      total: '$18'
-    },
-    {
-      id: '1111111',
-      status: 'Ready',
-      date: '07/30',
-      time: '2:24 pm',
-      customer: 'Sarah',
-      deliverer: '',
-      total: '$25'
+    if (!operatingHoursText) {
+      console.log('No operating_hours text provided, using defaults');
+      return defaultHours;
     }
-  ]);
+
+    console.log('Parsing operating_hours:', operatingHoursText);
+
+    // Map day abbreviations to full day names (handle various formats)
+    const dayMap: { [key: string]: keyof WeeklyHours } = {
+      'mon': 'monday',
+      'monday': 'monday',
+      'tue': 'tuesday',
+      'tuesday': 'tuesday',
+      'wed': 'wednesday',
+      'wednesday': 'wednesday',
+      'thu': 'thursday',
+      'thursday': 'thursday',
+      'fri': 'friday',
+      'friday': 'friday',
+      'sat': 'saturday',
+      'saturday': 'saturday',
+      'sun': 'sunday',
+      'sunday': 'sunday'
+    };
+
+    // Helper to convert 12-hour time to 24-hour format for input fields
+    const convertTo24Hour = (time12: string): string => {
+      // Clean up the time string - remove extra spaces
+      const cleaned = time12.trim().replace(/\s+/g, ' ');
+      
+      // Match formats like "9:00 AM", "09:00 AM", "9:00AM", etc.
+      const match = cleaned.match(/(\d{1,2}):(\d{2})\s*([AP]M)/i);
+      if (!match) {
+        console.warn('Could not parse time:', time12);
+        return '09:00';
+      }
+      
+      let hours = parseInt(match[1], 10);
+      const minutes = match[2];
+      const ampm = match[3].toUpperCase();
+      
+      if (ampm === 'PM' && hours !== 12) {
+        hours += 12;
+      } else if (ampm === 'AM' && hours === 12) {
+        hours = 0;
+      }
+      
+      const result = `${hours.toString().padStart(2, '0')}:${minutes}`;
+      console.log(`Converted ${time12} to ${result}`);
+      return result;
+    };
+
+    const parsedHours = { ...defaultHours };
+    
+    // Split by newlines, but also handle if it's all on one line with separators
+    let lines = operatingHoursText.split('\n').filter(line => line.trim());
+    
+    // If no newlines, try splitting by common separators
+    if (lines.length === 1 && operatingHoursText.includes(',')) {
+      lines = operatingHoursText.split(',').map(l => l.trim()).filter(l => l);
+    }
+
+    lines.forEach((line, index) => {
+      line = line.trim();
+      if (!line) return;
+
+      console.log(`Processing line ${index + 1}:`, line);
+
+      // Match format like "Mon: 9:00 AM - 9:00 PM" or "Monday: 9:00 AM - 9:00 PM" or "Mon: Closed"
+      // Also handle variations like "Mon 9:00 AM - 9:00 PM" (without colon)
+      const match = line.match(/(\w+)[:\s]+(.+)/i);
+      if (!match) {
+        console.warn('Could not parse line:', line);
+        return;
+      }
+
+      const dayName = match[1].toLowerCase();
+      const hoursText = match[2].trim();
+
+      const dayKey = dayMap[dayName];
+      if (!dayKey) {
+        console.warn('Unknown day:', dayName);
+        return;
+      }
+
+      // Check if closed (case insensitive)
+      if (hoursText.toLowerCase().includes('closed')) {
+        parsedHours[dayKey] = { isOpen: false, openTime: '09:00', closeTime: '21:00' };
+        console.log(`Set ${dayKey} to closed`);
+        return;
+      }
+
+      // Parse time range - handle various formats:
+      // "9:00 AM - 9:00 PM"
+      // "9:00AM - 9:00PM"
+      // "9:00 AM-9:00 PM"
+      // "9:00AM-9:00PM"
+      const timeMatch = hoursText.match(/(\d{1,2}:\d{2}\s*[AP]M)\s*[-–]\s*(\d{1,2}:\d{2}\s*[AP]M)/i);
+      if (timeMatch) {
+        const openTime = convertTo24Hour(timeMatch[1].trim());
+        const closeTime = convertTo24Hour(timeMatch[2].trim());
+        parsedHours[dayKey] = { isOpen: true, openTime, closeTime };
+        console.log(`Set ${dayKey} to ${openTime} - ${closeTime}`);
+      } else {
+        console.warn(`Could not parse time range for ${dayKey}:`, hoursText);
+      }
+    });
+
+    console.log('Final parsed hours:', parsedHours);
+    return parsedHours;
+  };
+
+  // Fetch restaurant data from database
+  useEffect(() => {
+    async function fetchRestaurantData() {
+      if (!restaurantId) return;
+      
+      try {
+        const restaurants = await getRestaurants();
+        const restaurantData = restaurants.find(r => r.restaurant_id === restaurantId || r.id === restaurantId);
+        
+        if (restaurantData) {
+          // Helper function to convert 24-hour time to 12-hour format
+          const formatTime = (time24: string): string => {
+            if (!time24) return '';
+            const [hours, minutes] = time24.split(':');
+            const hour = parseInt(hours, 10);
+            const ampm = hour >= 12 ? 'PM' : 'AM';
+            const hour12 = hour % 12 || 12;
+            return `${hour12}:${minutes} ${ampm}`;
+          };
+          
+          setRestaurant({
+            name: restaurantData.name || '',
+            address: restaurantData.address || '',
+            phone: restaurantData.phone || '',
+            email: restaurantData.email || '',
+            openingTime: formatTime(restaurantData.opening_time || '09:00'),
+            closingTime: formatTime(restaurantData.closing_time || '21:00'),
+            isRegistered: true,
+            registrationStatus: 'approved'
+          });
+
+          // Parse and set operating hours
+          if (restaurantData.operating_hours) {
+            const parsedHours = parseOperatingHours(restaurantData.operating_hours);
+            setWeeklyHours(parsedHours);
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching restaurant data:', error);
+      }
+    }
+    
+    fetchRestaurantData();
+  }, [restaurantId]);
+
+  // Map Supabase menu items to component format
+  const mappedMenuItems: MenuItem[] = useMemo(() => {
+    return supabaseMenuItems.map((item, index) => ({
+      id: index + 1, // Use index for component compatibility
+      name: item.name || 'Menu Item',
+      price: item.price || 0,
+      description: item.description || '',
+      availability: item.is_available !== false ? 'available' : 'unavailable'
+    }));
+  }, [supabaseMenuItems]);
+
+  const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+  
+  // Update menu items when Supabase data loads
+  useEffect(() => {
+    setMenuItems(mappedMenuItems);
+  }, [mappedMenuItems]);
+
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [ordersError, setOrdersError] = useState<string | null>(null);
+
+  // Fetch all orders from database (both pending and completed)
+  useEffect(() => {
+    async function fetchOrders() {
+      if (!restaurantId) return;
+      
+      try {
+        setOrdersLoading(true);
+        setOrdersError(null);
+        
+        // Fetch all orders (no status filter)
+        const allOrders = await getOrdersByRestaurant(restaurantId);
+        
+        // Map Supabase orders to component format
+        const mappedOrders: Order[] = allOrders.map((order: SupabaseOrder) => {
+          // Use order_id (like "FD0001") or fallback to order_number or id
+          const orderId = order.order_id || order.order_number || order.id?.substring(0, 8) || 'Unknown';
+          
+          // Parse date from created_at if available, otherwise use current date
+          let dateStr = 'N/A';
+          let timeStr = 'N/A';
+          if (order.created_at) {
+            const orderDate = new Date(order.created_at);
+            dateStr = orderDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+            timeStr = orderDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+          }
+          
+          // Map status: "Pending" -> "Pending", "Completed" -> "Arrived"
+          let displayStatus: 'Arrived' | 'In transit' | 'Preparing' | 'Ready' | 'Pending' = 'Pending';
+          if (order.status === 'Completed') {
+            displayStatus = 'Arrived';
+          } else if (order.status === 'Pending') {
+            displayStatus = 'Pending';
+          } else if (order.status === 'out_for_delivery') {
+            displayStatus = 'In transit';
+          } else if (order.status === 'ready') {
+            displayStatus = 'Ready';
+          } else if (order.status === 'preparing' || order.status === 'confirmed') {
+            displayStatus = 'Preparing';
+          }
+          
+          return {
+            id: orderId,
+            status: displayStatus,
+            date: dateStr,
+            time: timeStr,
+            customer: order.email || 'Unknown', // Use email as customer identifier
+            deliverer: order.driver_id || 'N/A', // Use driver_id from orders table
+            total: order.total ? `$${order.total.toFixed(2)}` : 'N/A'
+          };
+        });
+        
+        setOrders(mappedOrders);
+      } catch (error) {
+        console.error('Error fetching orders:', error);
+        setOrdersError(error instanceof Error ? error.message : 'Failed to fetch orders');
+      } finally {
+        setOrdersLoading(false);
+      }
+    }
+    
+    fetchOrders();
+  }, [restaurantId]);
 
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
   const [newItem, setNewItem] = useState<Partial<MenuItem>>({
@@ -295,7 +512,7 @@ export function RestaurantInterface({ onNavigateHome }: RestaurantInterfaceProps
     );
 
     return activeOrderTab === 'active' 
-      ? filtered.filter(order => order.status === 'Preparing' || order.status === 'In transit' || order.status === 'Ready')
+      ? filtered.filter(order => order.status === 'Pending' || order.status === 'Preparing' || order.status === 'In transit' || order.status === 'Ready')
       : filtered.filter(order => order.status === 'Arrived');
   };
 
@@ -328,42 +545,62 @@ export function RestaurantInterface({ onNavigateHome }: RestaurantInterfaceProps
               <TabsContent value="active">
                 <Card>
                   <CardContent className="pt-6">
-                    <div className="overflow-x-auto">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Order ID</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead>Date</TableHead>
-                            <TableHead>Time</TableHead>
-                            <TableHead>Customer</TableHead>
-                            <TableHead>Deliverer</TableHead>
-                            <TableHead>Total</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {filteredOrders().map((order, index) => (
-                            <TableRow key={index}>
-                              <TableCell className="font-medium">{order.id}</TableCell>
-                              <TableCell>
-                                <Badge variant={
-                                  order.status === 'Arrived' ? 'default' :
-                                  order.status === 'In transit' ? 'secondary' :
-                                  order.status === 'Preparing' ? 'destructive' : 'outline'
-                                }>
-                                  {order.status}
-                                </Badge>
-                              </TableCell>
-                              <TableCell>{order.date}</TableCell>
-                              <TableCell>{order.time}</TableCell>
-                              <TableCell>{order.customer}</TableCell>
-                              <TableCell>{order.deliverer || 'Pending'}</TableCell>
-                              <TableCell>{order.total}</TableCell>
+                    {ordersLoading ? (
+                      <div className="text-center py-12">
+                        <Loader2 className="h-8 w-8 animate-spin text-orange-500 mx-auto mb-4" />
+                        <p className="text-gray-600">Loading active orders...</p>
+                      </div>
+                    ) : ordersError ? (
+                      <div className="text-center py-12">
+                        <p className="text-red-500 text-lg mb-2">Error loading orders</p>
+                        <p className="text-gray-500 text-sm">{ordersError}</p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Order ID</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead>Date</TableHead>
+                              <TableHead>Time</TableHead>
+                              <TableHead>Customer</TableHead>
+                              <TableHead>Deliverer</TableHead>
+                              <TableHead>Total</TableHead>
                             </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
+                          </TableHeader>
+                          <TableBody>
+                            {filteredOrders().length > 0 ? (
+                              filteredOrders().map((order, index) => (
+                                <TableRow key={index}>
+                                  <TableCell className="font-medium">{order.id}</TableCell>
+                                  <TableCell>
+                                    <Badge variant={
+                                      order.status === 'Arrived' ? 'default' :
+                                      order.status === 'In transit' ? 'secondary' :
+                                      order.status === 'Preparing' ? 'destructive' : 'outline'
+                                    }>
+                                      {order.status}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell>{order.date}</TableCell>
+                                  <TableCell>{order.time}</TableCell>
+                                  <TableCell>{order.customer}</TableCell>
+                                  <TableCell>{order.deliverer || 'Pending'}</TableCell>
+                                  <TableCell>{order.total}</TableCell>
+                                </TableRow>
+                              ))
+                            ) : (
+                              <TableRow>
+                                <TableCell colSpan={7} className="text-center text-gray-500 py-8">
+                                  No active orders found.
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -371,38 +608,58 @@ export function RestaurantInterface({ onNavigateHome }: RestaurantInterfaceProps
               <TabsContent value="history">
                 <Card>
                   <CardContent className="pt-6">
-                    <div className="overflow-x-auto">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Order ID</TableHead>
-                            <TableHead>Status</TableHead>
-                            <TableHead>Date</TableHead>
-                            <TableHead>Time</TableHead>
-                            <TableHead>Customer</TableHead>
-                            <TableHead>Deliverer</TableHead>
-                            <TableHead>Total</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {filteredOrders().map((order, index) => (
-                            <TableRow key={index}>
-                              <TableCell className="font-medium">{order.id}</TableCell>
-                              <TableCell>
-                                <Badge variant="default">
-                                  {order.status}
-                                </Badge>
-                              </TableCell>
-                              <TableCell>{order.date}</TableCell>
-                              <TableCell>{order.time}</TableCell>
-                              <TableCell>{order.customer}</TableCell>
-                              <TableCell>{order.deliverer}</TableCell>
-                              <TableCell>{order.total}</TableCell>
+                    {ordersLoading ? (
+                      <div className="text-center py-12">
+                        <Loader2 className="h-8 w-8 animate-spin text-orange-500 mx-auto mb-4" />
+                        <p className="text-gray-600">Loading order history...</p>
+                      </div>
+                    ) : ordersError ? (
+                      <div className="text-center py-12">
+                        <p className="text-red-500 text-lg mb-2">Error loading orders</p>
+                        <p className="text-gray-500 text-sm">{ordersError}</p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Order ID</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead>Date</TableHead>
+                              <TableHead>Time</TableHead>
+                              <TableHead>Customer</TableHead>
+                              <TableHead>Deliverer</TableHead>
+                              <TableHead>Total</TableHead>
                             </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
+                          </TableHeader>
+                          <TableBody>
+                            {filteredOrders().length > 0 ? (
+                              filteredOrders().map((order, index) => (
+                                <TableRow key={index}>
+                                  <TableCell className="font-medium">{order.id}</TableCell>
+                                  <TableCell>
+                                    <Badge variant="default">
+                                      {order.status}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell>{order.date}</TableCell>
+                                  <TableCell>{order.time}</TableCell>
+                                  <TableCell>{order.customer}</TableCell>
+                                  <TableCell>{order.deliverer}</TableCell>
+                                  <TableCell>{order.total}</TableCell>
+                                </TableRow>
+                              ))
+                            ) : (
+                              <TableRow>
+                                <TableCell colSpan={7} className="text-center text-gray-500 py-8">
+                                  No completed orders found.
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               </TabsContent>
@@ -424,47 +681,63 @@ export function RestaurantInterface({ onNavigateHome }: RestaurantInterfaceProps
               </Button>
             </div>
 
-            <div className="grid gap-4">
-              {menuItems.map((item) => (
-                <Card key={item.id}>
-                  <CardContent className="pt-6">
-                    <div className="flex justify-between items-start">
-                      <div className="flex-1">
-                        <h3 className="font-bold">{item.name}</h3>
-                        <p className="text-gray-600 mb-2">{item.description}</p>
-                        <p className="font-semibold">${item.price.toFixed(2)}</p>
+            {menuLoading ? (
+              <div className="text-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-orange-500 mx-auto mb-4" />
+                <p className="text-gray-600">Loading menu items...</p>
+              </div>
+            ) : menuError ? (
+              <div className="text-center py-12">
+                <p className="text-red-500 text-lg mb-2">Error loading menu items</p>
+                <p className="text-gray-500 text-sm">{menuError}</p>
+              </div>
+            ) : menuItems.length > 0 ? (
+              <div className="grid gap-4">
+                {menuItems.map((item) => (
+                  <Card key={item.id}>
+                    <CardContent className="pt-6">
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <h3 className="font-bold">{item.name}</h3>
+                          <p className="text-gray-600 mb-2">{item.description || 'No description'}</p>
+                          <p className="font-semibold">${item.price.toFixed(2)}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge variant={item.availability === 'available' ? 'default' : 'secondary'}>
+                            {item.availability}
+                          </Badge>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => toggleAvailability(item.id)}
+                          >
+                            Toggle
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setEditingItem(item)}
+                          >
+                            <Edit className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => deleteMenuItem(item.id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <Badge variant={item.availability === 'available' ? 'default' : 'secondary'}>
-                          {item.availability}
-                        </Badge>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => toggleAvailability(item.id)}
-                        >
-                          Toggle
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setEditingItem(item)}
-                        >
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => deleteMenuItem(item.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-12">
+                <p className="text-gray-500 text-lg">No menu items found. Add items using the "Add Item" button above.</p>
+              </div>
+            )}
 
             {/* Add/Edit Item Dialog */}
             <Dialog open={!!editingItem} onOpenChange={() => setEditingItem(null)}>

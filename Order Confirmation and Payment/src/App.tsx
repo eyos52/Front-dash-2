@@ -16,6 +16,7 @@ type AppView = 'address-input' | 'home' | 'restaurant-detail' | 'customer' | 'or
 
 interface Restaurant {
   id: number;
+  supabaseId?: string; // Supabase UUID for fetching menu items
   name: string;
   rating: number;
   deliveryTime: string;
@@ -48,6 +49,7 @@ interface AuthUser {
   role?: string;
   email?: string;
   userType: 'restaurant' | 'admin' | 'staff';
+  restaurant_id?: string; // For restaurant users, store their restaurant_id
 }
 
 export default function App() {
@@ -100,7 +102,8 @@ export default function App() {
       name: userInfo.name,
       role: userInfo.role,
       email: userInfo.email,
-      userType: userType
+      userType: userType,
+      restaurant_id: userInfo.restaurant_id // Store restaurant_id for restaurant users
     };
     
     setAuthUser(authUser);
@@ -269,7 +272,7 @@ export default function App() {
       case 'restaurant-registration':
         return <RestaurantRegistration onNavigateHome={() => setCurrentView('home')} onNavigateLogin={() => setCurrentView('login')} />;
       case 'restaurant':
-        return authUser?.userType === 'restaurant' ? <RestaurantInterface onNavigateHome={() => setCurrentView('home')} /> : null;
+        return authUser?.userType === 'restaurant' ? <RestaurantInterface onNavigateHome={() => setCurrentView('home')} restaurantId={authUser.restaurant_id} /> : null;
       case 'admin':
         return authUser?.userType === 'admin' ? <FrontDashAdmin onNavigateHome={() => setCurrentView('home')} /> : null;
       case 'staff':

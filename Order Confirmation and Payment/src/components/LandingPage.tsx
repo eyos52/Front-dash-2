@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
 import { ImageWithFallback } from './figma/ImageWithFallback';
+import { useRestaurants } from '../lib/utils/hooks';
 import { 
   Search, 
   MapPin, 
@@ -13,11 +14,13 @@ import {
   Utensils,
   Coffee,
   Wine,
-  Home
+  Home,
+  Loader2
 } from 'lucide-react';
 
 interface Restaurant {
   id: number;
+  supabaseId?: string; // Store the Supabase UUID for fetching menu items
   name: string;
   rating: number;
   deliveryTime: string;
@@ -46,6 +49,7 @@ interface LandingPageProps {
 
 export function LandingPage({ onNavigate, onOrderFood, onRestaurantSelect, cart, getTotalItems, deliveryAddress, onDeliveryAddressChange }: LandingPageProps) {
   const [selectedCategory, setSelectedCategory] = useState('all');
+  const { restaurants: supabaseRestaurants, loading, error } = useRestaurants();
 
   const categories = [
     { id: 'all', name: 'All', icon: Home },
@@ -57,286 +61,57 @@ export function LandingPage({ onNavigate, onOrderFood, onRestaurantSelect, cart,
     { id: 'coffee', name: 'Coffee & Tea', icon: Coffee },
   ];
 
-  // Store data for all categories
-  const allStores: { [key: string]: Restaurant[] } = {
-    restaurants: [
-      {
-        id: 1,
-        name: "Tony's Italian Bistro",
-        rating: 4.8,
-        deliveryTime: "25-35 min",
-        distance: "0.3 mi",
-        category: "Italian",
-        image: "https://images.unsplash.com/photo-1662197480393-2a82030b7b83?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxpdGFsaWFuJTIwcGFzdGElMjByZXN0YXVyYW50fGVufDF8fHx8MTc1ODYwMzMyMnww&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        promo: "$0 delivery fee",
-        openingTime: "11:00 AM",
-        closingTime: "10:00 PM"
-      },
-      {
-        id: 2,
-        name: "Burger Palace",
-        rating: 4.6,
-        deliveryTime: "15-25 min",
-        distance: "0.5 mi",
-        category: "American",
-        image: "https://images.unsplash.com/photo-1634674599370-bec0babedb8a?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxidXJnZXIlMjBmcmllcyUyMGZhc3QlMjBmb29kfGVufDF8fHx8MTc1ODU1ODA3NXww&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        openingTime: "10:00 AM",
-        closingTime: "11:00 PM"
-      },
-      {
-        id: 3,
-        name: "Sakura Sushi",
-        rating: 4.9,
-        deliveryTime: "30-40 min",
-        distance: "0.8 mi",
-        category: "Japanese",
-        image: "https://images.unsplash.com/photo-1608731002466-057222dc4989?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxhc2lhbiUyMGZvb2QlMjBzdXNoaSUyMGRlbGl2ZXJ5fGVufDF8fHx8MTc1ODY3ODc1OHww&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        promo: "20% off $30+",
-        openingTime: "12:00 PM",
-        closingTime: "9:30 PM"
-      },
-      {
-        id: 4,
-        name: "Taco Fiesta",
-        rating: 4.7,
-        deliveryTime: "20-30 min",
-        distance: "0.4 mi",
-        category: "Mexican",
-        image: "https://images.unsplash.com/photo-1700625915031-d2c7d472ea7b?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxtZXhpY2FuJTIwdGFjb3MlMjByZXN0YXVyYW50fGVufDF8fHx8MTc1ODYyMzQxOXww&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        openingTime: "11:00 AM",
-        closingTime: "10:30 PM"
-      },
-      {
-        id: 5,
-        name: "Spice Garden",
-        rating: 4.5,
-        deliveryTime: "35-45 min",
-        distance: "1.2 mi",
-        category: "Indian",
-        image: "https://images.unsplash.com/photo-1690915475414-9aaecfd3ba74?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxpbmRpYW4lMjBjdXJyeSUyMHJlc3RhdXJhbnR8ZW58MXx8fHwxNzU4NjIzNDEzfDA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        promo: "Free appetizer",
-        openingTime: "5:00 PM",
-        closingTime: "11:00 PM"
-      },
-      {
-        id: 6,
-        name: "Golden Dragon",
-        rating: 4.4,
-        deliveryTime: "25-35 min",
-        distance: "0.7 mi",
-        category: "Chinese",
-        image: "https://images.unsplash.com/photo-1593472329313-cebb35f2f3fe?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxjaGluZXNlJTIwdGFrZW91dCUyMHJlc3RhdXJhbnR8ZW58MXx8fHwxNzU4Njc5MjUwfDA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        openingTime: "11:30 AM",
-        closingTime: "9:00 PM"
-      }
-    ],
-    grocery: [
-      {
-        id: 101,
-        name: "Fresh Market",
-        rating: 4.7,
-        deliveryTime: "30-45 min",
-        distance: "0.4 mi",
-        category: "Grocery",
-        image: "https://images.unsplash.com/photo-1611871962581-33f9120a7ebb?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxncm9jZXJ5JTIwc3RvcmUlMjBzdXBlcm1hcmtldHxlbnwxfHx8fDE3NTg2Nzk3NzV8MA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        promo: "Free delivery on $35+",
-        openingTime: "7:00 AM",
-        closingTime: "10:00 PM"
-      },
-      {
-        id: 102,
-        name: "Organic Valley",
-        rating: 4.6,
-        deliveryTime: "45-60 min",
-        distance: "0.8 mi",
-        category: "Organic Grocery",
-        image: "https://images.unsplash.com/photo-1598217475213-268e8ec0126e?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxvcmdhbmljJTIwcHJvZHVjZSUyMGdyb2Nlcnl8ZW58MXx8fHwxNzU4Njc5Nzg0fDA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        promo: "20% off produce",
-        openingTime: "8:00 AM",
-        closingTime: "9:00 PM"
-      },
-      {
-        id: 103,
-        name: "Corner Market",
-        rating: 4.3,
-        deliveryTime: "20-30 min",
-        distance: "0.2 mi",
-        category: "Convenience Store",
-        image: "https://images.unsplash.com/photo-1611871962581-33f9120a7ebb?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxncm9jZXJ5JTIwc3RvcmUlMjBzdXBlcm1hcmtldHxlbnwxfHx8fDE3NTg2Nzk3NzV8MA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        openingTime: "6:00 AM",
-        closingTime: "12:00 AM"
-      },
-      {
-        id: 104,
-        name: "Whole Foods Plus",
-        rating: 4.8,
-        deliveryTime: "40-55 min",
-        distance: "1.1 mi",
-        category: "Premium Grocery",
-        image: "https://images.unsplash.com/photo-1598217475213-268e8ec0126e?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxvcmdhbmljJTIwcHJvZHVjZSUyMGdyb2Nlcnl8ZW58MXx8fHwxNzU4Njc5Nzg0fDA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        promo: "Free samples available",
-        openingTime: "7:00 AM",
-        closingTime: "11:00 PM"
-      },
-      {
-        id: 105,
-        name: "24/7 Express Market",
-        rating: 4.6,
-        deliveryTime: "25-40 min",
-        distance: "0.6 mi",
-        category: "24-Hour Grocery",
-        image: "https://images.unsplash.com/photo-1611871962581-33f9120a7ebb?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxncm9jZXJ5JTIwc3RvcmUlMjBzdXBlcm1hcmtldHxlbnwxfHx8fDE3NTg2Nzk3NzV8MA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        promo: "Always open for you!",
-        openingTime: "12:00 AM",
-        closingTime: "11:59 PM"
-      }
-    ],
-    retail: [
-      {
-        id: 201,
-        name: "Style Boutique",
-        rating: 4.5,
-        deliveryTime: "60-90 min",
-        distance: "0.6 mi",
-        category: "Fashion",
-        image: "https://images.unsplash.com/photo-1641440615976-d4bc4eb7dab8?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxyZXRhaWwlMjBjbG90aGluZyUyMHN0b3JlfGVufDF8fHx8MTc1ODYxNTM1NXww&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        promo: "30% off new arrivals",
-        openingTime: "10:00 AM",
-        closingTime: "8:00 PM"
-      },
-      {
-        id: 202,
-        name: "Tech Zone",
-        rating: 4.7,
-        deliveryTime: "45-60 min",
-        distance: "0.9 mi",
-        category: "Electronics",
-        image: "https://images.unsplash.com/photo-1703165552745-37e85f0273cd?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxlbGVjdHJvbmljcyUyMHJldGFpbCUyMHN0b3JlfGVufDF8fHx8MTc1ODY3OTc4N3ww&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        promo: "Free setup service",
-        openingTime: "9:00 AM",
-        closingTime: "9:00 PM"
-      },
-      {
-        id: 203,
-        name: "Home & Garden",
-        rating: 4.4,
-        deliveryTime: "90-120 min",
-        distance: "1.5 mi",
-        category: "Home Goods",
-        image: "https://images.unsplash.com/photo-1641440615976-d4bc4eb7dab8?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxyZXRhaWwlMjBjbG90aGluZyUyMHN0b3JlfGVufDF8fHx8MTc1ODYxNTM1NXww&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        openingTime: "8:00 AM",
-        closingTime: "7:00 PM"
-      },
-      {
-        id: 204,
-        name: "City Pharmacy",
-        rating: 4.9,
-        deliveryTime: "30-45 min",
-        distance: "0.3 mi",
-        category: "Health & Wellness",
-        image: "https://images.unsplash.com/photo-1648091856225-dd091d7e5075?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxwaGFybWFjeSUyMGRydWdzdG9yZXxlbnwxfHx8fDE3NTg2Nzk3ODl8MA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        promo: "Free health consultations",
-        openingTime: "8:00 AM",
-        closingTime: "10:00 PM"
-      }
-    ],
-    alcohol: [
-      {
-        id: 301,
-        name: "Wine & Spirits Co.",
-        rating: 4.6,
-        deliveryTime: "45-60 min",
-        distance: "0.7 mi",
-        category: "Wine & Liquor",
-        image: "https://images.unsplash.com/photo-1684159890786-5406275a5ebf?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHx3aW5lJTIwbGlxdW9yJTIwc3RvcmV8ZW58MXx8fHwxNzU4Njc5NzgwfDA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        promo: "Buy 2 get 10% off",
-        openingTime: "12:00 PM",
-        closingTime: "10:00 PM"
-      },
-      {
-        id: 302,
-        name: "Craft Beer Heaven",
-        rating: 4.8,
-        deliveryTime: "30-45 min",
-        distance: "0.5 mi",
-        category: "Craft Beer",
-        image: "https://images.unsplash.com/photo-1545287072-469f3761413c?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxjcmFmdCUyMGJlZXIlMjBicmV3ZXJ5fGVufDF8fHx8MTc1ODY3OTc5Mnww&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        promo: "Free tasting notes",
-        openingTime: "2:00 PM",
-        closingTime: "11:00 PM"
-      },
-      {
-        id: 303,
-        name: "Premium Liquors",
-        rating: 4.5,
-        deliveryTime: "60-75 min",
-        distance: "1.2 mi",
-        category: "Premium Spirits",
-        image: "https://images.unsplash.com/photo-1684159890786-5406275a5ebf?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHx3aW5lJTIwbGlxdW9yJTIwc3RvcmV8ZW58MXx8fHwxNzU4Njc5NzgwfDA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        openingTime: "1:00 PM",
-        closingTime: "9:00 PM"
-      }
-    ],
-    coffee: [
-      {
-        id: 401,
-        name: "Roasted Bean Co.",
-        rating: 4.9,
-        deliveryTime: "15-25 min",
-        distance: "0.2 mi",
-        category: "Coffee Shop",
-        image: "https://images.unsplash.com/photo-1642647916129-3909c75c0267?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxjb2ZmZWUlMjBzaG9wJTIwY2FmZXxlbnwxfHx8fDE3NTg2NTE2NjB8MA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        promo: "Free pastry with coffee",
-        openingTime: "6:00 AM",
-        closingTime: "8:00 PM"
-      },
-      {
-        id: 402,
-        name: "Tea Garden Café",
-        rating: 4.7,
-        deliveryTime: "20-30 min",
-        distance: "0.4 mi",
-        category: "Tea House",
-        image: "https://images.unsplash.com/photo-1642647916129-3909c75c0267?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxjb2ZmZWUlMjBzaG9wJTIwY2FmZXxlbnwxfHx8fDE3NTg2NTE2NjB8MA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        promo: "20% off loose leaf teas",
-        openingTime: "7:00 AM",
-        closingTime: "7:00 PM"
-      },
-      {
-        id: 403,
-        name: "Espresso Express",
-        rating: 4.4,
-        deliveryTime: "10-20 min",
-        distance: "0.1 mi",
-        category: "Quick Coffee",
-        image: "https://images.unsplash.com/photo-1642647916129-3909c75c0267?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxjb2ZmZWUlMjBzaG9wJTIwY2FmZXxlbnwxfHx8fDE3NTg2NTE2NjB8MA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        openingTime: "5:30 AM",
-        closingTime: "9:00 PM"
-      },
-      {
-        id: 404,
-        name: "Artisan Coffee House",
-        rating: 4.8,
-        deliveryTime: "25-35 min",
-        distance: "0.6 mi",
-        category: "Specialty Coffee",
-        image: "https://images.unsplash.com/photo-1642647916129-3909c75c0267?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxjb2ZmZWUlMjBzaG9wJTIwY2FmZXxlbnwxfHx8fDE3NTg2NTE2NjB8MA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral",
-        promo: "Bean subscription available",
-        openingTime: "6:30 AM",
-        closingTime: "6:00 PM"
-      }
-    ]
+  // Helper function to convert 24-hour time to 12-hour format
+  const formatTime = (time24: string): string => {
+    if (!time24) return '';
+    const [hours, minutes] = time24.split(':');
+    const hour = parseInt(hours, 10);
+    const ampm = hour >= 12 ? 'PM' : 'AM';
+    const hour12 = hour % 12 || 12;
+    return `${hour12}:${minutes} ${ampm}`;
   };
+
+  // Map Supabase restaurants to component format
+  const mappedRestaurants: Restaurant[] = useMemo(() => {
+    return supabaseRestaurants
+      .filter(r => !r.status || r.status === 'active') // Only show active restaurants if status exists
+      .map((r, index) => ({
+        id: index + 1, // Use index as numeric ID for component compatibility
+        supabaseId: r.restaurant_id || r.id || '', // Use restaurant_id (text) first, fallback to id (UUID)
+        name: r.name || 'Restaurant',
+        rating: r.rating ?? 0,
+        deliveryTime: r.delivery_time || '30-45 min',
+        distance: r.distance || '0.5 mi',
+        category: r.cuisine_type || 'Restaurant',
+        image: r.image_url || '',
+        promo: r.promo,
+        openingTime: formatTime(r.opening_time || '09:00'),
+        closingTime: formatTime(r.closing_time || '21:00')
+      }));
+  }, [supabaseRestaurants]);
+
+  // Store data for all categories - populated from database
+  const allStores: { [key: string]: Restaurant[] } = useMemo(() => {
+    // For now, all restaurants go into the restaurants category
+    // You can add logic later to categorize based on cuisine_type
+    return {
+      restaurants: mappedRestaurants,
+      grocery: [],
+      retail: [],
+      alcohol: [],
+      coffee: []
+    };
+  }, [mappedRestaurants]);
 
   // Get current stores based on selected category
   const getCurrentStores = () => {
     if (selectedCategory === 'all') {
       // Show a mix from all categories
       return [
-        ...allStores.restaurants.slice(0, 2),
-        ...allStores.grocery.slice(0, 2),
-        ...allStores.retail.slice(0, 2),
-        ...allStores.coffee.slice(0, 2)
+        ...allStores.restaurants,
+        ...allStores.grocery,
+        ...allStores.retail,
+        ...allStores.coffee
       ];
     }
     return allStores[selectedCategory] || allStores.restaurants;
@@ -462,60 +237,78 @@ export function LandingPage({ onNavigate, onOrderFood, onRestaurantSelect, cart,
           </div>
 
           {/* Restaurant Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {currentStores.map((restaurant) => (
-              <Card 
-                key={restaurant.id} 
-                className="overflow-hidden hover:shadow-lg transition-all duration-200 cursor-pointer group"
-                onClick={() => onRestaurantSelect(restaurant)}
-              >
-                <div className="relative">
-                  <div className="aspect-[4/3] w-full">
-                    <ImageWithFallback
-                      src={restaurant.image}
-                      alt={restaurant.name}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    />
-                  </div>
-                  {restaurant.promo && (
-                    <Badge className="absolute top-2 left-2 bg-orange-500 text-white">
-                      {restaurant.promo}
-                    </Badge>
-                  )}
-                </div>
-                <CardContent className="p-4">
-                  <h3 className="font-semibold text-lg mb-2 line-clamp-1">{restaurant.name}</h3>
-                  
-                  <div className="flex items-center gap-4 text-sm text-gray-600 mb-2">
-                    <div className="flex items-center gap-1">
-                      <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
-                      <span className="font-medium">{restaurant.rating}</span>
+          {loading ? (
+            <div className="text-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin mx-auto text-orange-600 mb-4" />
+              <p className="text-gray-500 text-lg">Loading restaurants...</p>
+            </div>
+          ) : error ? (
+            <div className="text-center py-12">
+              <p className="text-red-500 text-lg mb-2">Error loading restaurants</p>
+              <p className="text-gray-500 text-sm">{error}</p>
+            </div>
+          ) : currentStores.length > 0 ? (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                {currentStores.map((restaurant) => (
+                  <Card 
+                    key={restaurant.id} 
+                    className="overflow-hidden hover:shadow-lg transition-all duration-200 cursor-pointer group"
+                    onClick={() => onRestaurantSelect(restaurant)}
+                  >
+                    <div className="relative">
+                      <div className="aspect-[4/3] w-full">
+                        <ImageWithFallback
+                          src={restaurant.image}
+                          alt={restaurant.name}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                      </div>
+                      {restaurant.promo && (
+                        <Badge className="absolute top-2 left-2 bg-orange-500 text-white">
+                          {restaurant.promo}
+                        </Badge>
+                      )}
                     </div>
-                    <div className="flex items-center gap-1">
-                      <Clock className="h-4 w-4" />
-                      <span>{restaurant.deliveryTime}</span>
-                    </div>
-                  </div>
-                  
-                  <div className="flex items-center justify-between mb-1">
-                    <p className="text-sm text-gray-600">{restaurant.category}</p>
-                    <p className="text-sm text-gray-600">{restaurant.distance}</p>
-                  </div>
+                    <CardContent className="p-4">
+                      <h3 className="font-semibold text-lg mb-2 line-clamp-1">{restaurant.name}</h3>
+                      
+                      <div className="flex items-center gap-4 text-sm text-gray-600 mb-2">
+                        <div className="flex items-center gap-1">
+                          <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
+                          <span className="font-medium">{restaurant.rating}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Clock className="h-4 w-4" />
+                          <span>{restaurant.deliveryTime}</span>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-sm text-gray-600">{restaurant.category}</p>
+                        <p className="text-sm text-gray-600">{restaurant.distance}</p>
+                      </div>
 
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs text-gray-500">Open {restaurant.openingTime} - {restaurant.closingTime}</p>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-gray-500">Open {restaurant.openingTime} - {restaurant.closingTime}</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
 
-          {/* Load More */}
-          <div className="text-center mt-8">
-            <Button variant="outline" className="px-8">
-              Load More Restaurants
-            </Button>
-          </div>
+              {/* Load More */}
+              <div className="text-center mt-8">
+                <Button variant="outline" className="px-8">
+                  Load More Restaurants
+                </Button>
+              </div>
+            </>
+          ) : (
+            <div className="text-center py-12">
+              <p className="text-gray-500 text-lg">No restaurants available. Check back later!</p>
+            </div>
+          )}
         </main>
       </div>
     </div>

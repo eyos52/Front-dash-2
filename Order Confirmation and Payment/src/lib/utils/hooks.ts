@@ -5,9 +5,10 @@ import {
   createRestaurantRegistration,
   createOrder,
   createOrderItems,
-  getRestaurantRegistrations
+  getRestaurantRegistrations,
+  getMenuItemsByRestaurant
 } from '../services/database';
-import { Restaurant, Order, OrderItem } from '../supabase';
+import { Restaurant, Order, OrderItem, MenuItem } from '../supabase';
 
 // Hook for fetching restaurants
 export function useRestaurants() {
@@ -19,11 +20,14 @@ export function useRestaurants() {
     async function fetchRestaurants() {
       try {
         setLoading(true);
-        const data = await getRestaurants();
-        setRestaurants(data);
         setError(null);
+        const data = await getRestaurants();
+        console.log('Fetched restaurants:', data);
+        setRestaurants(data);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch restaurants');
+        console.error('Error fetching restaurants:', err);
+        const errorMessage = err instanceof Error ? err.message : 'Failed to fetch restaurants';
+        setError(errorMessage);
       } finally {
         setLoading(false);
       }
@@ -122,5 +126,39 @@ export function useRestaurantRegistration() {
   };
 
   return { registerRestaurant, loading, error };
+}
+
+// Hook for fetching menu items by restaurant
+export function useMenuItems(restaurantId: string | null) {
+  const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!restaurantId) {
+      setLoading(false);
+      setMenuItems([]);
+      return;
+    }
+
+    async function fetchMenuItems() {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await getMenuItemsByRestaurant(restaurantId);
+        setMenuItems(data);
+      } catch (err) {
+        console.error('Error fetching menu items:', err);
+        const errorMessage = err instanceof Error ? err.message : 'Failed to fetch menu items';
+        setError(errorMessage);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchMenuItems();
+  }, [restaurantId]);
+
+  return { menuItems, loading, error };
 }
 

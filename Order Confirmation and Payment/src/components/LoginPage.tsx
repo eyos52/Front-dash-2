@@ -32,6 +32,9 @@ export function LoginPage({ onLogin, onBackToHome }: LoginPageProps) {
   // Demo accounts for testing
   const demoAccounts = {
     restaurant: [
+      { username: 'allchicken', password: 'Chicken123!', name: 'All Chicken Meals', email: 'laura@allchicken.com', restaurant_id: '001' },
+      { username: 'pizzaonly', password: 'Pizza123!', name: 'Pizza Only', email: 'russel@pizzaonly.com', restaurant_id: '002' },
+      { username: 'bestburgers', password: 'Burger123!', name: 'Best Burgers', email: 'eager@bestburgers.com', restaurant_id: '003' },
       { username: 'tony.bistro', password: 'TonyPass123!', name: "Tony's Italian Bistro", email: 'tony@tonys.com' },
       { username: 'burger.palace', password: 'BurgerPass123!', name: 'Burger Palace', email: 'info@burgerpalace.com' },
       { username: 'dragon.sushi', password: 'DragonPass123!', name: 'Dragon Sushi', email: 'info@dragonsushi.com' },
