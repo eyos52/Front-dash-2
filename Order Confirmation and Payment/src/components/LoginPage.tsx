@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Alert, AlertDescription } from './ui/alert';
 import { toast } from 'sonner@2.0.3';
 import { Shield, Store, Eye, EyeOff } from 'lucide-react';
+import { getStaffByUsername } from '../lib/services/database';
 
 interface LoginPageProps {
   onLogin: (userType: 'restaurant' | 'admin' | 'staff', userInfo: any) => void;
@@ -97,23 +98,69 @@ export function LoginPage({ onLogin, onBackToHome }: LoginPageProps) {
 
     setIsLoading(true);
 
-    // Simulate API call delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    try {
+      // For staff, authenticate from database
+      if (credentials.role === 'staff') {
+        try {
+          const staffMember = await getStaffByUsername(credentials.username);
+          
+          // Simple password check (in production, use proper hashing)
+          // For demo, check if password_hash exists or use demo accounts
+          const passwordHash = btoa(credentials.password);
+          const isValidPassword = staffMember.password_hash === passwordHash || 
+            !staffMember.password_hash; // Allow demo accounts without password_hash
+          
+          // Also check demo accounts as fallback
+          const demoAccount = demoAccounts.staff.find(acc => 
+            acc.username === credentials.username && acc.password === credentials.password
+          );
 
-    const accountList = demoAccounts[credentials.role as 'restaurant' | 'admin' | 'staff'];
-    const account = accountList.find(acc => 
-      acc.username === credentials.username && acc.password === credentials.password
-    );
+          if (isValidPassword || demoAccount) {
+            const account = demoAccount || {
+              username: staffMember.username,
+              name: staffMember.name,
+              role: staffMember.role,
+              email: staffMember.email || `${staffMember.username}@frontdash.app`,
+              id: staffMember.id,
+              firstTimeLogin: staffMember.first_time_login
+            };
+            
+            toast.success(`Welcome back, ${account.name}!`);
+            onLogin('staff', account);
+            setIsLoading(false);
+            return;
+          } else {
+            toast.error('Invalid credentials. Please check your username and password.');
+            setErrors(['Invalid username or password']);
+            setIsLoading(false);
+            return;
+          }
+        } catch (error: any) {
+          // Fallback to demo accounts if database lookup fails
+          console.log('Database lookup failed, trying demo accounts:', error);
+        }
+      }
 
-    if (account) {
-      toast.success(`Welcome back, ${account.name}!`);
-      onLogin(credentials.role as 'restaurant' | 'admin' | 'staff', account);
-    } else {
-      toast.error('Invalid credentials. Please check your username and password.');
-      setErrors(['Invalid username or password']);
+      // For restaurant and admin, use demo accounts
+      const accountList = demoAccounts[credentials.role as 'restaurant' | 'admin' | 'staff'];
+      const account = accountList.find(acc => 
+        acc.username === credentials.username && acc.password === credentials.password
+      );
+
+      if (account) {
+        toast.success(`Welcome back, ${account.name}!`);
+        onLogin(credentials.role as 'restaurant' | 'admin' | 'staff', account);
+      } else {
+        toast.error('Invalid credentials. Please check your username and password.');
+        setErrors(['Invalid username or password']);
+      }
+    } catch (error: any) {
+      console.error('Login error:', error);
+      toast.error('An error occurred during login. Please try again.');
+      setErrors(['Login failed. Please try again.']);
+    } finally {
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
   };
 
   const handleDemoLogin = (role: 'restaurant' | 'admin' | 'staff') => {
@@ -302,7 +349,7 @@ export function LoginPage({ onLogin, onBackToHome }: LoginPageProps) {
             {/* Demo Accounts */}
             <div className="border-t pt-4">
               <p className="text-sm font-medium text-gray-700 text-center mb-3">Quick Demo Access:</p>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 <Button 
                   variant="outline" 
                   size="sm" 
@@ -321,6 +368,15 @@ export function LoginPage({ onLogin, onBackToHome }: LoginPageProps) {
                   <Shield className="h-4 w-4 mr-1" />
                   Admin
                 </Button>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  className="text-green-600 border-green-200 hover:bg-green-50"
+                  onClick={() => handleDemoLogin('staff')}
+                >
+                  <Shield className="h-4 w-4 mr-1" />
+                  Staff
+                </Button>
               </div>
             </div>
 
@@ -337,6 +393,10 @@ export function LoginPage({ onLogin, onBackToHome }: LoginPageProps) {
                     <div className="flex justify-between">
                       <span className="text-blue-700 font-medium">Admin:</span>
                       <span className="font-mono">admin / Admin123!</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-green-700 font-medium">Staff:</span>
+                      <span className="font-mono">dispatch1 / Staff123!</span>
                     </div>
                   </div>
                 </div>

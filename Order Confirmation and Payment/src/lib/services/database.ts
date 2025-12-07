@@ -134,6 +134,7 @@ export async function updateOrderStatus(id: string, status: Order['status']) {
   return data as Order;
 }
 
+// Get orders by restaurant (for restaurant portal)
 export async function getOrdersByRestaurant(restaurantId: string, status?: string) {
   console.log('Fetching orders for restaurant_id:', restaurantId, 'status:', status);
   
@@ -175,6 +176,134 @@ export async function getOrdersByRestaurant(restaurantId: string, status?: strin
   
   console.log('Fetched orders:', data?.length || 0, data);
   return (data || []) as Order[];
+}
+
+// Get pending orders (order queue) - for staff interface
+export async function getPendingOrders() {
+  const { data, error } = await supabase
+    .from('orders')
+    .select(`
+      *,
+      restaurants (id, name, address, city, state),
+      order_items (*)
+    `)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: true });
+
+  if (error) throw error;
+  return data;
+}
+
+// Get orders assigned to a staff member
+export async function getStaffActiveOrders(staffId: string) {
+  const { data, error } = await supabase
+    .from('orders')
+    .select(`
+      *,
+      restaurants (id, name, address, city, state),
+      order_items (*)
+    `)
+    .eq('staff_id', staffId)
+    .in('status', ['confirmed', 'preparing', 'ready', 'out_for_delivery'])
+    .order('created_at', { ascending: false });
+
+  if (error) throw error;
+  return data;
+}
+
+// Get delivered orders for a staff member
+export async function getStaffDeliveredOrders(staffId: string) {
+  const { data, error } = await supabase
+    .from('orders')
+    .select(`
+      *,
+      restaurants (id, name, address, city, state),
+      order_items (*)
+    `)
+    .eq('staff_id', staffId)
+    .eq('status', 'delivered')
+    .order('updated_at', { ascending: false })
+    .limit(10);
+
+  if (error) throw error;
+  return data;
+}
+
+// Assign order to staff member (retrieve from queue)
+export async function assignOrderToStaff(orderId: string, staffId: string) {
+  const { data, error } = await supabase
+    .from('orders')
+    .update({ 
+      staff_id: staffId,
+      status: 'confirmed'
+    })
+    .eq('id', orderId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as Order;
+}
+
+// Assign driver to order
+export async function assignDriverToOrder(orderId: string, driverId: string, estimatedDelivery: string) {
+  const { data, error } = await supabase
+    .from('orders')
+    .update({ 
+      driver_id: driverId,
+      status: 'out_for_delivery',
+      estimated_delivery: estimatedDelivery
+    })
+    .eq('id', orderId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as Order;
+}
+
+// Confirm delivery
+export async function confirmDelivery(orderId: string, deliveredAt: string) {
+  const { data, error } = await supabase
+    .from('orders')
+    .update({ 
+      status: 'delivered',
+      delivered_at: deliveredAt
+    })
+    .eq('id', orderId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as Order;
+}
+
+// Get staff member by username
+export async function getStaffByUsername(username: string) {
+  const { data, error } = await supabase
+    .from('staff_members')
+    .select('*')
+    .eq('username', username)
+    .single();
+
+  if (error) throw error;
+  return data as StaffMember;
+}
+
+// Update staff password
+export async function updateStaffPassword(staffId: string, passwordHash: string) {
+  const { data, error } = await supabase
+    .from('staff_members')
+    .update({ 
+      password_hash: passwordHash,
+      first_time_login: false
+    })
+    .eq('id', staffId)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data as StaffMember;
 }
 
 // ========== STAFF OPERATIONS ==========

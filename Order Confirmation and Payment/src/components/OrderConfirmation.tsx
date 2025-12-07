@@ -6,15 +6,14 @@ import { Label } from './ui/label';
 import { Separator } from './ui/separator';
 import { Alert, AlertDescription } from './ui/alert';
 import { Checkbox } from './ui/checkbox';
-import { validateEmail, validatePhone, validateZipCode, formatPhone } from './utils/validation';
+import { validatePhone, validateZipCode, formatPhone } from './utils/validation';
 import { 
   ArrowLeft, 
   CreditCard, 
   MapPin, 
   Phone, 
   Gift,
-  CheckCircle,
-  Mail
+  CheckCircle
 } from 'lucide-react';
 
 interface ShippingDetails {
@@ -71,10 +70,9 @@ export function OrderConfirmation({ onOrderComplete, cart, clearCart }: OrderCon
   const [paymentMethod, setPaymentMethod] = useState<'card' | 'paypal' | 'venmo'>('card');
   const [sendAsGift, setSendAsGift] = useState(false);
   const [orderConfirmed, setOrderConfirmed] = useState(false);
+  const [orderData, setOrderData] = useState<any>(null);
   const [validationErrors, setValidationErrors] = useState<{ [key: string]: string }>({});
   
-  const [customerEmail, setCustomerEmail] = useState('');
-
   const [shippingDetails, setShippingDetails] = useState<ShippingDetails>({
     firstName: '',
     lastName: '',
@@ -92,7 +90,88 @@ export function OrderConfirmation({ onOrderComplete, cart, clearCart }: OrderCon
     nameOnCard: ''
   });
 
-  // Check if cart is empty
+  // Show confirmation page if order is confirmed (check this first, before cart check)
+  if (orderConfirmed && orderData) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4 py-8">
+        <div className="max-w-2xl w-full">
+          <Card>
+            <CardContent className="p-8">
+              <div className="text-center mb-6">
+                <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
+                <h2 className="text-2xl font-bold mb-2">Order Confirmed!</h2>
+              </div>
+
+              {/* Order Number and Estimated Delivery */}
+              <div className="bg-gray-50 rounded-lg p-4 mb-6 text-center">
+                <p className="font-semibold text-lg mb-1">Order #{orderData.orderNumber}</p>
+                <p className="text-sm text-gray-600">Estimated delivery: {orderData.estimatedDelivery}</p>
+              </div>
+
+              {/* Order Details */}
+              <div className="space-y-4 mb-6">
+                <div>
+                  <h3 className="font-semibold text-lg mb-2">Restaurant</h3>
+                  <p className="text-gray-700">{orderData.restaurant.name}</p>
+                  <p className="text-sm text-gray-600">{orderData.restaurant.address}</p>
+                </div>
+
+                <Separator />
+
+                <div>
+                  <h3 className="font-semibold text-lg mb-2">Order Items</h3>
+                  <div className="space-y-2">
+                    {orderData.items.map((item: CartItem) => (
+                      <div key={item.id} className="flex justify-between items-center">
+                        <div>
+                          <p className="font-medium">{item.name}</p>
+                          <p className="text-sm text-gray-600">Quantity: {item.quantity}</p>
+                        </div>
+                        <p className="font-medium">${(item.price * item.quantity).toFixed(2)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <Separator />
+
+                <div>
+                  <h3 className="font-semibold text-lg mb-2">Delivery Address</h3>
+                  <p className="text-gray-700">
+                    {orderData.deliveryAddress.buildingNumber} {orderData.deliveryAddress.streetName}
+                  </p>
+                  <p className="text-gray-700">
+                    {orderData.deliveryAddress.city}, {orderData.deliveryAddress.state} {orderData.deliveryAddress.zipCode}
+                  </p>
+                </div>
+
+                <Separator />
+
+                <div className="flex justify-between items-center pt-2">
+                  <span className="font-bold text-lg">Total</span>
+                  <span className="font-bold text-lg">${orderData.total.toFixed(2)}</span>
+                </div>
+              </div>
+
+              {/* Thank you message and button */}
+              <div className="text-center space-y-4 pt-4">
+                <p className="text-gray-700 text-lg">Thanks for choosing FrontDash!</p>
+                <Button 
+                  onClick={() => window.location.href = '/'}
+                  className="w-full bg-orange-500 hover:bg-orange-600"
+                  size="lg"
+                >
+                  Place Another Order
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  // Check if cart is empty (only if order is not confirmed)
   if (!cart.restaurant || cart.items.length === 0) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -163,12 +242,6 @@ export function OrderConfirmation({ onOrderComplete, cart, clearCart }: OrderCon
   const validateForm = (): boolean => {
     const errors: { [key: string]: string } = {};
     
-    // Validate customer email
-    const emailValidation = validateEmail(customerEmail);
-    if (!emailValidation.isValid) {
-      errors.customerEmail = emailValidation.error || 'Please enter a valid email address';
-    }
-    
     // Validate shipping details
     if (!shippingDetails.firstName.trim()) errors.firstName = 'First name is required';
     if (!shippingDetails.lastName.trim()) errors.lastName = 'Last name is required';
@@ -219,9 +292,8 @@ export function OrderConfirmation({ onOrderComplete, cart, clearCart }: OrderCon
     }
     
     // Create order data for tracking
-    const orderData = {
+    const newOrderData = {
       orderNumber: `FD${Date.now().toString().slice(-6)}`,
-      email: customerEmail,
       deliveryAddress: {
         buildingNumber: shippingDetails.address.split(' ')[0] || '',
         streetName: shippingDetails.address.split(' ').slice(1).join(' ') || shippingDetails.address,
@@ -244,54 +316,19 @@ export function OrderConfirmation({ onOrderComplete, cart, clearCart }: OrderCon
       estimatedDelivery: new Date(Date.now() + 35 * 60 * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
     };
     
+    setOrderData(newOrderData);
     setOrderConfirmed(true);
     
-    // Pass order data to parent component for tracking
-    if (onOrderComplete) {
-      onOrderComplete(orderData);
-    }
+    // Clear cart after order completion
+    clearCart();
+    
+    // Don't call onOrderComplete to prevent redirect to order-tracking page
+    // The confirmation page should stay here
   };
 
   const handleBackToStore = () => {
     window.history.back();
   };
-
-  if (orderConfirmed) {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <header className="bg-white shadow-sm border-b">
-          <div className="max-w-7xl mx-auto px-4 py-4">
-            <div className="flex items-center gap-4">
-              <Button variant="ghost" size="sm" onClick={handleBackToStore} className="gap-2">
-                <ArrowLeft className="h-4 w-4" />
-                Back to Store
-              </Button>
-              <h1 className="text-2xl font-bold text-orange-600">FrontDash</h1>
-            </div>
-          </div>
-        </header>
-
-        <div className="max-w-2xl mx-auto px-4 py-8">
-          <Card>
-            <CardContent className="p-8 text-center">
-              <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
-              <h2 className="text-2xl font-bold mb-2">Order Confirmed!</h2>
-              <p className="text-gray-600 mb-6">
-                Thank you for your order. You'll receive a confirmation email shortly.
-              </p>
-              <div className="bg-gray-50 rounded-lg p-4 mb-6">
-                <p className="font-semibold">Order #FD{Date.now().toString().slice(-6)}</p>
-                <p className="text-sm text-gray-600">Estimated delivery: 25-35 minutes</p>
-              </div>
-              <Button onClick={handleBackToStore} className="w-full bg-orange-500 hover:bg-orange-600">
-                Continue Shopping
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -312,42 +349,11 @@ export function OrderConfirmation({ onOrderComplete, cart, clearCart }: OrderCon
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Left Column - Order Form */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Customer Email */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <span className="bg-orange-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm">1</span>
-                  Contact Information
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div>
-                  <Label htmlFor="customerEmail" className="flex items-center gap-2">
-                    <Mail className="h-4 w-4" />
-                    Email Address
-                  </Label>
-                  <Input
-                    id="customerEmail"
-                    type="email"
-                    placeholder="Enter your email (e.g., user@example.com)"
-                    value={customerEmail}
-                    onChange={(e) => setCustomerEmail(e.target.value)}
-                    className={validationErrors.customerEmail ? 'border-red-300 focus:border-red-500' : ''}
-                  />
-                  {validationErrors.customerEmail && (
-                    <p className="text-sm text-red-600 mt-1">
-                      {validationErrors.customerEmail}
-                    </p>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
             {/* Shipping Details */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <span className="bg-orange-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm">2</span>
+                  <span className="bg-orange-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm">1</span>
                   Delivery Details
                 </CardTitle>
               </CardHeader>
@@ -465,7 +471,7 @@ export function OrderConfirmation({ onOrderComplete, cart, clearCart }: OrderCon
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <span className="bg-orange-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm">3</span>
+                  <span className="bg-orange-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm">2</span>
                   Payment Details
                 </CardTitle>
               </CardHeader>

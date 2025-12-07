@@ -52,6 +52,7 @@ export interface Order {
   customer_id?: string;
   restaurant_id: string; // Text ID like "001", "002", "003"
   driver_id?: string; // Text ID like "D1", "D2" or null
+  staff_id?: string; // Staff member ID
   order_number?: string;
   status: 'Pending' | 'Completed' | 'pending' | 'confirmed' | 'preparing' | 'ready' | 'out_for_delivery' | 'delivered' | 'cancelled';
   delivery_address?: string;
@@ -67,6 +68,7 @@ export interface Order {
   total?: number;
   payment_method?: 'card' | 'paypal' | 'venmo';
   estimated_delivery?: string;
+  delivered_at?: string;
   created_at?: string;
 }
 
@@ -108,6 +110,9 @@ export interface StaffMember {
   username: string;
   role: 'support' | 'manager' | 'admin';
   date_added: string;
+  password_hash?: string;
+  first_time_login?: boolean;
+  email?: string;
 }
 
 export interface Driver {

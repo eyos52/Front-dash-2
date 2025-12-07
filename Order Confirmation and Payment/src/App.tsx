@@ -276,7 +276,18 @@ export default function App() {
       case 'admin':
         return authUser?.userType === 'admin' ? <FrontDashAdmin onNavigateHome={() => setCurrentView('home')} /> : null;
       case 'staff':
-        return authUser?.userType === 'staff' ? <FrontDashStaff onNavigateHome={() => setCurrentView('home')} /> : null;
+        return authUser?.userType === 'staff' ? (
+          <FrontDashStaff 
+            onNavigateHome={() => setCurrentView('home')} 
+            staffUser={{
+              username: authUser.username,
+              name: authUser.name,
+              id: (authUser as any).id,
+              email: authUser.email,
+              firstTimeLogin: (authUser as any).firstTimeLogin
+            }}
+          />
+        ) : null;
       case 'login':
         return <LoginPage onLogin={handleLogin} onBackToHome={() => setCurrentView('home')} />;
       default:
