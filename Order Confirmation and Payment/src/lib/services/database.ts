@@ -41,47 +41,264 @@ export async function getRestaurantById(id: string) {
 }
 
 export async function createRestaurantRegistration(registration: Omit<RestaurantRegistration, 'id' | 'submission_date' | 'status' | 'decision_date' | 'reviewed_by'>) {
+  // Generate random ID
+  const randomId = `REQ-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
+  
+  // Generate restaurant_id in format like "001", "002", etc.
+  // First, get the highest existing restaurant_id number
+  const { data: existingRestaurants } = await supabase
+    .from('restaurants')
+    .select('restaurant_id')
+    .order('restaurant_id', { ascending: false })
+    .limit(1);
+  
+  let restaurantIdNum = 1;
+  if (existingRestaurants && existingRestaurants.length > 0) {
+    const lastId = existingRestaurants[0].restaurant_id;
+    const match = lastId.match(/^(\d+)$/);
+    if (match) {
+      restaurantIdNum = parseInt(match[1], 10) + 1;
+    }
+  }
+  const randomRestaurantId = String(restaurantIdNum).padStart(3, '0'); // Format: "001", "002", etc.
+  
+  // Combine owner first and last name for contact_name
+  const contactName = `${registration.owner_first_name} ${registration.owner_last_name}`.trim();
+  
+  // Build note with additional information (cuisine type, description, hours)
+  // Store structured data in note for parsing: "Cuisine: X | Description: Y | Hours: HH:MM-HH:MM | City: X | State: Y | Zip: Z"
+  const noteParts = [];
+  if (registration.cuisine_type) {
+    noteParts.push(`Cuisine: ${registration.cuisine_type}`);
+  }
+  if (registration.description) {
+    noteParts.push(`Description: ${registration.description}`);
+  }
+  if (registration.opening_time && registration.closing_time) {
+    noteParts.push(`Hours: ${registration.opening_time}-${registration.closing_time}`);
+  }
+  // Store city, state, zip in note for parsing
+  noteParts.push(`City: ${registration.city}`);
+  noteParts.push(`State: ${registration.state}`);
+  noteParts.push(`Zip: ${registration.zip_code}`);
+  const note = noteParts.join(' | ').trim();
+  
+  // Store full address in proposed_address (street address only, city/state/zip in note)
+  const fullAddress = registration.address.trim();
+  
+  // Store registration data in the requests table columns
   const { data, error } = await supabase
-    .from('restaurant_registrations')
+    .from('requests')
     .insert([{
-      ...registration,
-      submission_date: new Date().toISOString(),
-      status: 'pending'
+      id: randomId,
+      kind: 'registration',
+      restaurant_id: randomRestaurantId,
+      status: 'pending',
+      proposed_name: registration.restaurant_name,
+      proposed_contact_name: contactName,
+      proposed_contact_email: registration.email,
+      proposed_phone: registration.phone,
+      proposed_address: fullAddress,
+      note: note || null
     }])
     .select()
     .single();
 
-  if (error) throw error;
-  return data as RestaurantRegistration;
+  if (error) {
+    console.error('Error creating registration request:', error);
+    throw error;
+  }
+  return data as any;
 }
 
 export async function getRestaurantRegistrations(status?: 'pending' | 'approved' | 'rejected') {
-  let query = supabase.from('restaurant_registrations').select('*');
+  let query = supabase.from('requests').select('*').eq('kind', 'registration');
   
+  // Filter by status if provided
   if (status) {
     query = query.eq('status', status);
   }
   
-  const { data, error } = await query.order('submission_date', { ascending: false });
+  const { data, error } = await query.order('id', { ascending: false });
   
-  if (error) throw error;
-  return data as RestaurantRegistration[];
+  if (error) {
+    console.error('Error fetching registration requests:', error);
+    throw error;
+  }
+  return data as any[];
+}
+
+// Helper function to parse data from note field
+function parseNoteData(note: string | null): { city: string; state: string; zip: string; operatingHours: string; cuisine: string; description: string } {
+  const result = {
+    city: '',
+    state: '',
+    zip: '',
+    operatingHours: '',
+    cuisine: '',
+    description: ''
+  };
+
+  if (!note) return result;
+
+  // Parse structured note format: "Cuisine: X | Description: Y | Hours: HH:MM-HH:MM | City: X | State: Y | Zip: Z"
+  const parts = note.split('|').map(p => p.trim());
+  
+  for (const part of parts) {
+    if (part.startsWith('City:')) {
+      result.city = part.replace('City:', '').trim();
+    } else if (part.startsWith('State:')) {
+      result.state = part.replace('State:', '').trim();
+    } else if (part.startsWith('Zip:')) {
+      result.zip = part.replace('Zip:', '').trim();
+    } else if (part.startsWith('Hours:')) {
+      const hours = part.replace('Hours:', '').trim();
+      // Convert "HH:MM-HH:MM" to "HH:MM - HH:MM"
+      result.operatingHours = hours.replace('-', ' - ');
+    } else if (part.startsWith('Cuisine:')) {
+      result.cuisine = part.replace('Cuisine:', '').trim();
+    } else if (part.startsWith('Description:')) {
+      result.description = part.replace('Description:', '').trim();
+    }
+  }
+
+  return result;
+}
+
+// Helper function to create restaurant from approved request
+async function createRestaurantFromRequest(request: any): Promise<void> {
+  // Check if restaurant already exists
+  const { data: existingRestaurant } = await supabase
+    .from('restaurants')
+    .select('restaurant_id')
+    .eq('restaurant_id', request.restaurant_id)
+    .single();
+
+  if (existingRestaurant) {
+    console.log(`Restaurant with ID ${request.restaurant_id} already exists, skipping creation`);
+    return;
+  }
+
+  // Parse data from note field
+  const noteData = parseNoteData(request.note);
+
+  // Create restaurant entry with all required fields
+  const restaurantData: any = {
+    restaurant_id: request.restaurant_id,
+    registration_status: 'approved',
+    is_active: true,
+    withdrawal_status: null, // Set to null or 'none' based on your schema
+    name: request.proposed_name || 'New Restaurant',
+    contact_name: request.proposed_contact_name || 'Restaurant Owner',
+    contact_email: request.proposed_contact_email || '',
+    contact_phone: request.proposed_phone || '',
+    street1: request.proposed_address || '', // Street address
+    street2: null, // Not available from registration form
+    city: noteData.city || null,
+    state: noteData.state || null,
+    zip: noteData.zip || null,
+    operating_hours: noteData.operatingHours || null
+  };
+
+  const { error: restaurantError } = await supabase
+    .from('restaurants')
+    .insert([restaurantData]);
+
+  if (restaurantError) {
+    console.error('Error creating restaurant:', restaurantError);
+    // Check if it's a duplicate key error (restaurant already exists)
+    if (restaurantError.code === '23505' || restaurantError.message.includes('duplicate')) {
+      console.warn('Restaurant with this ID already exists, skipping creation');
+    } else {
+      throw new Error(`Failed to create restaurant: ${restaurantError.message}`);
+    }
+  } else {
+    console.log('Restaurant created successfully:', restaurantData.restaurant_id);
+  }
 }
 
 export async function updateRestaurantRegistrationStatus(id: string, status: 'approved' | 'rejected', reviewerId: string) {
-  const { data, error } = await supabase
-    .from('restaurant_registrations')
-    .update({
-      status,
-      decision_date: new Date().toISOString(),
-      reviewed_by: reviewerId
-    })
+  // First, get the request to retrieve registration data
+  const { data: request, error: fetchError } = await supabase
+    .from('requests')
+    .select('*')
     .eq('id', id)
+    .eq('kind', 'registration')
+    .single();
+
+  if (fetchError) {
+    console.error('Error fetching request:', fetchError);
+    throw fetchError;
+  }
+
+  // If approving, create a restaurant entry
+  if (status === 'approved' && request) {
+    await createRestaurantFromRequest(request);
+  }
+
+  // Update the request status and decided_at timestamp
+  const updateData: any = {
+    status: status
+  };
+  
+  if (status === 'approved' || status === 'rejected') {
+    updateData.decided_at = new Date().toISOString();
+  }
+
+  const { data, error } = await supabase
+    .from('requests')
+    .update(updateData)
+    .eq('id', id)
+    .eq('kind', 'registration')
     .select()
     .single();
 
-  if (error) throw error;
-  return data as RestaurantRegistration;
+  if (error) {
+    console.error('Error updating registration status:', error);
+    throw error;
+  }
+  return data as any;
+}
+
+// Function to backfill approved requests that haven't been moved to restaurants table
+export async function processApprovedRegistrationRequests() {
+  try {
+    // Get all approved registration requests
+    const { data: approvedRequests, error: fetchError } = await supabase
+      .from('requests')
+      .select('*')
+      .eq('kind', 'registration')
+      .eq('status', 'approved');
+
+    if (fetchError) {
+      console.error('Error fetching approved requests:', fetchError);
+      throw fetchError;
+    }
+
+    if (!approvedRequests || approvedRequests.length === 0) {
+      console.log('No approved registration requests to process');
+      return { processed: 0, errors: [] };
+    }
+
+    const errors: string[] = [];
+    let processed = 0;
+
+    // Process each approved request
+    for (const request of approvedRequests) {
+      try {
+        await createRestaurantFromRequest(request);
+        processed++;
+      } catch (err: any) {
+        console.error(`Error processing request ${request.id}:`, err);
+        errors.push(`Request ${request.id}: ${err.message || 'Unknown error'}`);
+      }
+    }
+
+    return { processed, errors, total: approvedRequests.length };
+  } catch (error: any) {
+    console.error('Error processing approved requests:', error);
+    throw error;
+  }
 }
 
 // ========== ORDER OPERATIONS ==========
@@ -521,10 +738,11 @@ export async function updateStaffPassword(staffId: string, passwordHash: string)
 // ========== STAFF OPERATIONS ==========
 
 export async function getStaffMembers() {
-  // Query all columns to see what we get
+  // Query all columns ordered by firstname
   const { data, error } = await supabase
     .from('staffuser')
-    .select('*');
+    .select('*')
+    .order('firstname', { ascending: true });
 
   if (error) {
     console.error('Error fetching staff members:', error);
@@ -537,52 +755,80 @@ export async function getStaffMembers() {
     throw error;
   }
 
-  // Log the first staff member to see actual column structure
-  if (data && data.length > 0) {
-    console.log('Sample staff data from database:', data[0]);
-    console.log('Available columns:', Object.keys(data[0]));
-  }
-
   // Map the data to match our interface
-  // Handle different possible column name formats
+  // Use username as the primary identifier (staffuser table doesn't have id column)
   const mappedData = (data || [])
-    .map((staff: any, index: number) => {
+    .map((staff: any) => {
       const firstname = staff.firstname || staff.first_name || staff['first name'] || '';
       const lastname = staff.lastname || staff.last_name || staff['last name'] || '';
-      // Status column is capitalized "Status" in the database
-      const status = staff.Status !== undefined ? staff.Status : (staff.status !== undefined ? staff.status : 'active');
-      // Try multiple possible ID column names
-      const id = staff.id || staff.staff_id || staff.user_id || staff.uuid || 
-                 (staff.firstname && staff.lastname ? `${staff.firstname}-${staff.lastname}-${index}` : `staff-${index}`);
+      const username = staff.username || '';
+      // Status column is capitalized "Status" in the database (boolean)
+      const statusValue = staff.Status !== undefined ? staff.Status : (staff.status !== undefined ? staff.status : true);
+      // Convert boolean to string for display
+      const status = statusValue === true || statusValue === 'active' ? 'active' : 'inactive';
+      // Use username as the id since staffuser table doesn't have an id column
+      const id = username || `${firstname}-${lastname}`;
 
       return {
-        id: String(id), // Ensure ID is always a string
+        id: id, // Use username as id
         firstname: firstname,
         lastname: lastname,
+        username: username,
         status: status
       };
     })
-    // Filter out staff with status = false (handle both boolean and string)
-    .filter((staff: StaffMember) => {
-      const statusValue = staff.status;
-      // Keep only staff where status is not false (boolean) or 'false' (string)
-      return statusValue !== false && statusValue !== 'false' && statusValue !== 0;
+    // Filter out staff with status = false (inactive staff)
+    .filter((staff: any) => {
+      return staff.status === 'active';
     });
 
-  console.log('Mapped staff data (filtered):', mappedData);
   return mappedData as StaffMember[];
 }
 
-export async function createStaffMember(staff: Omit<StaffMember, 'id' | 'date_added'>) {
-  const username = staff.username || 
-    `${staff.name.split(' ')[1].toLowerCase()}${Math.floor(Math.random() * 90) + 10}`;
+export async function createStaffMember(firstname: string, lastname: string) {
+  // Generate username: firstname + lastname + number (if needed)
+  const baseUsername = `${firstname.toLowerCase()}${lastname.toLowerCase()}`;
+  
+  // Check if base username exists
+  const { data: existing } = await supabase
+    .from('staffuser')
+    .select('username')
+    .eq('username', baseUsername)
+    .single();
+  
+  let username = baseUsername;
+  
+  // If base username exists, append a number
+  if (existing) {
+    // Find the highest number suffix for this base username
+    const { data: allWithBase } = await supabase
+      .from('staffuser')
+      .select('username')
+      .like('username', `${baseUsername}%`);
+    
+    if (allWithBase && allWithBase.length > 0) {
+      // Extract numbers from existing usernames
+      const numbers = allWithBase
+        .map(u => {
+          const match = u.username.match(new RegExp(`^${baseUsername}(\\d+)$`));
+          return match ? parseInt(match[1], 10) : 0;
+        })
+        .filter(n => n > 0);
+      
+      const nextNumber = numbers.length > 0 ? Math.max(...numbers) + 1 : 1;
+      username = `${baseUsername}${nextNumber}`;
+    } else {
+      username = `${baseUsername}1`;
+    }
+  }
   
   const { data, error } = await supabase
     .from('staffuser')
     .insert([{
-      ...staff,
       username,
-      date_added: new Date().toISOString()
+      firstname,
+      lastname,
+      Status: true
     }])
     .select()
     .single();
@@ -591,20 +837,28 @@ export async function createStaffMember(staff: Omit<StaffMember, 'id' | 'date_ad
     console.error('Error creating staff member:', error);
     throw error;
   }
-  return data as StaffMember;
+  
+  return {
+    id: data.username, // Use username as id since staffuser table doesn't have id column
+    firstname: data.firstname,
+    lastname: data.lastname,
+    username: data.username,
+    status: data.Status ? 'active' : 'inactive'
+  } as StaffMember;
 }
 
-export async function deleteStaffMember(id: string) {
-  // Validate ID
-  if (!id || id.trim() === '' || id.startsWith('staff-')) {
-    throw new Error('Staff member ID is required and must be a valid database ID');
+export async function deleteStaffMember(identifier: string) {
+  // Validate identifier
+  if (!identifier || identifier.trim() === '') {
+    throw new Error('Staff member identifier is required');
   }
 
-  // Instead of deleting, set Status to false (column name is capitalized "Status")
+  // Use soft delete: set Status to false (column name is capitalized "Status")
+  // staffuser table uses username as primary key (no id column)
   const { data, error } = await supabase
     .from('staffuser')
     .update({ Status: false })
-    .eq('id', id)
+    .eq('username', identifier)
     .select()
     .single();
 
@@ -615,7 +869,7 @@ export async function deleteStaffMember(id: string) {
       details: error.details,
       hint: error.hint,
       code: error.code,
-      id: id
+      identifier: identifier
     });
     throw error;
   }
@@ -626,10 +880,11 @@ export async function deleteStaffMember(id: string) {
 // ========== DRIVER OPERATIONS ==========
 
 export async function getDrivers() {
-  // First, try to get all columns to see what the actual column names are
+  // Query all columns ordered by full_name
   const { data, error } = await supabase
     .from('drivers')
-    .select('*');
+    .select('*')
+    .order('full_name', { ascending: true });
 
   if (error) {
     console.error('Error fetching drivers:', error);
@@ -642,60 +897,111 @@ export async function getDrivers() {
     throw error;
   }
 
-  // Log the first driver to see actual column structure
-  if (data && data.length > 0) {
-    console.log('Sample driver data from database:', data[0]);
-    console.log('Available columns:', Object.keys(data[0]));
-  }
-
   // Map the data to match our interface
-  // Handle different possible column name formats
-  const mappedData = (data || []).map((driver: any) => {
-    // Try different possible column name variations
-    const fullName = driver['Full name'] || driver.full_name || driver.Full_name || driver['full name'] || driver.name || '';
-    const driverId = driver.driver_id || driver.id || '';
-    const phone = driver.phone || '';
-    const employmentStatus = driver.employment_status || driver.status || '';
-    const isAvailable = driver.is_available !== undefined ? driver.is_available : (driver.available !== undefined ? driver.available : true);
+  // Filter out inactive drivers (employment_status = 'inactive' or is_available = false)
+  const mappedData = (data || [])
+    .map((driver: any) => {
+      const fullName = driver.full_name || driver['Full name'] || driver.Full_name || driver['full name'] || driver.name || '';
+      const driverId = driver.driver_id || driver.id || '';
+      const phone = driver.phone || '';
+      const employmentStatus = driver.employment_status || driver.status || 'active';
+      const isAvailable = driver.is_available !== undefined ? driver.is_available : (driver.available !== undefined ? driver.available : true);
 
-    return {
-      driver_id: driverId,
-      'Full name': fullName,
-      phone: phone,
-      employment_status: employmentStatus,
-      is_available: isAvailable
-    };
-  });
+      return {
+        driver_id: driverId,
+        'Full name': fullName,
+        phone: phone || '',
+        employment_status: employmentStatus,
+        is_available: isAvailable
+      };
+    })
+    // Filter out inactive drivers
+    .filter((driver: Driver) => {
+      return driver.employment_status !== 'inactive' && driver.is_available !== false;
+    });
 
-  console.log('Mapped drivers data:', mappedData);
   return mappedData as Driver[];
 }
 
-export async function createDriver(driver: Omit<Driver, 'id' | 'start_date'>) {
-  const username = `@${driver.last_name.toLowerCase()}${Math.floor(Math.random() * 90) + 10}`;
+export async function createDriver(firstname: string, lastname: string) {
+  // Generate driver_id: D1, D2, D3, etc.
+  // First, get the highest existing driver_id number
+  const { data: existingDrivers } = await supabase
+    .from('drivers')
+    .select('driver_id')
+    .like('driver_id', 'D%')
+    .order('driver_id', { ascending: false })
+    .limit(1);
+  
+  let driverId = 'D1';
+  if (existingDrivers && existingDrivers.length > 0) {
+    const lastId = existingDrivers[0].driver_id;
+    const match = lastId.match(/^D(\d+)$/);
+    if (match) {
+      const nextNumber = parseInt(match[1], 10) + 1;
+      driverId = `D${nextNumber}`;
+    }
+  }
+  
+  // Combine firstname and lastname into full_name
+  const fullName = `${firstname} ${lastname}`;
   
   const { data, error } = await supabase
     .from('drivers')
     .insert([{
-      ...driver,
-      username,
-      start_date: new Date().toISOString(),
-      status: 'active'
+      driver_id: driverId,
+      full_name: fullName,
+      phone: null,
+      employment_status: 'active',
+      is_available: true
     }])
     .select()
     .single();
 
-  if (error) throw error;
-  return data as Driver;
+  if (error) {
+    console.error('Error creating driver:', error);
+    throw error;
+  }
+  
+  return {
+    driver_id: data.driver_id,
+    'Full name': data.full_name,
+    phone: data.phone || '',
+    employment_status: data.employment_status || 'active',
+    is_available: data.is_available !== undefined ? data.is_available : true
+  } as Driver;
 }
 
-export async function deleteDriver(id: string) {
-  const { error } = await supabase
-    .from('drivers')
-    .delete()
-    .eq('id', id);
+export async function deleteDriver(driverId: string) {
+  // Validate driver_id
+  if (!driverId || driverId.trim() === '') {
+    throw new Error('Driver ID is required');
+  }
 
-  if (error) throw error;
+  // Use soft delete: set employment_status to 'inactive' and is_available to false
+  const { data, error } = await supabase
+    .from('drivers')
+    .update({ 
+      employment_status: 'inactive',
+      is_available: false
+    })
+    .eq('driver_id', driverId)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error updating driver status:', error);
+    console.error('Error details:', {
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      code: error.code,
+      driver_id: driverId
+    });
+    throw error;
+  }
+  
+  return data;
 }
 
 // ========== WITHDRAWAL REQUESTS ==========

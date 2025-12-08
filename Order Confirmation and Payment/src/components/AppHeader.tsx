@@ -19,7 +19,7 @@ interface AppHeaderProps {
   authUser: AuthUser | null;
   cart: CartState;
   getTotalItems: () => number;
-  onNavigate: (view: any) => void;
+  onNavigate: (view: 'customer' | 'restaurant' | 'admin' | 'staff' | 'login' | 'restaurant-registration') => void;
   onLogout: () => void;
   requireAuth: (view: 'restaurant' | 'admin') => boolean;
   showBackButton?: boolean;
@@ -80,7 +80,7 @@ export function AppHeader({
             {/* Navigation Links */}
             <Button
               variant="ghost" 
-              onClick={() => onNavigate('restaurant')}
+              onClick={() => onNavigate('restaurant-registration')}
               size="sm"
             >
               Partner with us

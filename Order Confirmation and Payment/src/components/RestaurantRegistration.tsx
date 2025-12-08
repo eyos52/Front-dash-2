@@ -11,6 +11,8 @@ import { ImageWithFallback } from './figma/ImageWithFallback';
 import { Upload, User, Mail, Phone, MapPin, Utensils, Clock, FileText, Image, CheckCircle } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { validateEmailSimple as validateEmail, validatePasswordSimple as validatePassword, validatePhoneNumber, validateZipCodeSimple as validateZipCode } from './utils/validation';
+import { createRestaurantRegistration } from '../lib/services/database';
+import { uploadFile } from '../lib/services/storage';
 
 interface RestaurantRegistrationProps {
   onNavigateHome: () => void;
@@ -155,10 +157,7 @@ export function RestaurantRegistration({ onNavigateHome, onNavigateLogin }: Rest
       newErrors.zipCode = 'Zip code must be exactly 5 digits';
     }
 
-    // Menu file validation
-    if (!menuFile) {
-      newErrors.menu = 'Menu upload is required';
-    }
+    // Menu file validation - removed requirement, now optional
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -175,8 +174,37 @@ export function RestaurantRegistration({ onNavigateHome, onNavigateLogin }: Rest
     setIsSubmitting(true);
 
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Upload files to Supabase Storage
+      let menuFileUrl = '';
+      let logoFileUrl = '';
+
+      if (menuFile) {
+        menuFileUrl = await uploadFile('restaurant-documents', menuFile);
+      }
+
+      if (logoFile) {
+        logoFileUrl = await uploadFile('restaurant-logos', logoFile);
+      }
+
+      // Create registration in database
+      // Note: menu_file_url is required in schema, so we'll use empty string if no file uploaded
+      await createRestaurantRegistration({
+        restaurant_name: formData.restaurantName,
+        owner_first_name: formData.firstName,
+        owner_last_name: formData.lastName,
+        email: formData.email,
+        phone: formData.phoneNumber,
+        cuisine_type: formData.cuisineType,
+        address: formData.address,
+        city: formData.city,
+        state: formData.state,
+        zip_code: formData.zipCode,
+        description: formData.description,
+        opening_time: formData.openingTime,
+        closing_time: formData.closingTime,
+        menu_file_url: menuFileUrl || '', // Use empty string if no file uploaded
+        logo_file_url: logoFileUrl || undefined
+      });
       
       setShowSuccess(true);
       toast.success('Registration submitted successfully! We will review your application and contact you within 2-3 business days.');
@@ -206,8 +234,9 @@ export function RestaurantRegistration({ onNavigateHome, onNavigateLogin }: Rest
         setShowSuccess(false);
       }, 3000);
 
-    } catch (error) {
-      toast.error('Registration failed. Please try again.');
+    } catch (error: any) {
+      console.error('Registration error:', error);
+      toast.error(error.message || 'Registration failed. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -489,7 +518,7 @@ export function RestaurantRegistration({ onNavigateHome, onNavigateLogin }: Rest
             </CardHeader>
             <CardContent className="space-y-4">
               <div>
-                <Label htmlFor="menuUpload">Upload Menu *</Label>
+                <Label htmlFor="menuUpload">Upload Menu (Optional)</Label>
                 <div className="mt-2">
                   <input
                     id="menuUpload"

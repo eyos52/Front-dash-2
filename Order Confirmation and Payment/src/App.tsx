@@ -314,13 +314,24 @@ export default function App() {
     }
   };
 
+  const handleHeaderNavigate = (view: 'customer' | 'restaurant' | 'admin' | 'staff' | 'login' | 'restaurant-registration') => {
+    if (view === 'restaurant') {
+      setCurrentView('restaurant-registration');
+    } else if (view === 'admin') {
+      if (!requireAuth('admin')) return;
+      setCurrentView(view);
+    } else {
+      setCurrentView(view);
+    }
+  };
+
   const getHeaderProps = () => {
     const baseProps = {
       currentView,
       authUser,
       cart,
       getTotalItems,
-      onNavigate: setCurrentView,
+      onNavigate: handleHeaderNavigate,
       onLogout: handleLogout,
       requireAuth
     };

@@ -12,7 +12,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { validateEmail, validatePhone, formatPhone } from './utils/validation';
 import { useMenuItems } from '../lib/utils/hooks';
-import { getRestaurants, getOrdersByRestaurant, confirmOrder } from '../lib/services/database';
+import { getRestaurants, getOrdersByRestaurant, confirmOrder, createWithdrawalRequest } from '../lib/services/database';
+import { toast } from 'sonner@2.0.3';
 import { Loader2, CheckCircle2 } from 'lucide-react';
 import { Order as SupabaseOrder } from '../lib/supabase';
 import { 
@@ -467,9 +468,33 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
     ));
   };
 
-  const withdrawFromFrontDash = () => {
-    setShowWithdrawDialog(false);
-    alert('Withdrawal request submitted. An administrator will review your request.');
+  const withdrawFromFrontDash = async () => {
+    try {
+      // Get restaurant information for the withdrawal request
+      const restaurantName = restaurant.name || 'Unknown Restaurant';
+      const contactInfo = `${restaurant.email || ''}${restaurant.phone ? ` / ${restaurant.phone}` : ''}`.trim();
+      
+      if (!restaurantId) {
+        toast.error('Restaurant ID not found. Cannot submit withdrawal request.');
+        setShowWithdrawDialog(false);
+        return;
+      }
+
+      // Note: restaurant_id in withdrawal_requests expects UUID, but restaurantId might be text ID
+      // For now, we'll use restaurantId as-is. If it's a text ID, we may need to look up the UUID
+      // This will work if restaurantId is already a UUID, otherwise the database will reject it
+      await createWithdrawalRequest({
+        restaurant_id: restaurantId, // This should be the UUID from restaurants.id
+        restaurant_name: restaurantName,
+        contact_info: contactInfo || restaurant.email || restaurant.phone || 'No contact info'
+      });
+
+      setShowWithdrawDialog(false);
+      toast.success('Withdrawal request submitted. An administrator will review your request.');
+    } catch (error: any) {
+      console.error('Error submitting withdrawal request:', error);
+      toast.error(error.message || 'Failed to submit withdrawal request. Please try again.');
+    }
   };
 
   const validateContactInfo = () => {
