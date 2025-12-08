@@ -125,12 +125,11 @@ export interface StaffMember {
 }
 
 export interface Driver {
-  id: string;
-  first_name: string;
-  last_name: string;
-  username: string;
-  start_date: string;
-  status: 'active' | 'inactive';
+  driver_id: string;
+  'Full name': string;
+  phone: string;
+  employment_status: string;
+  is_available: boolean;
 }
 
 export interface WithdrawalRequest {

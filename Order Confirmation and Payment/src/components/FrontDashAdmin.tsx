@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { toast } from 'sonner@2.0.3';
+import { getDrivers, getStaffMembers, deleteStaffMember } from '../lib/services/database';
 import { 
   Search, 
   FileText,
@@ -33,19 +34,18 @@ interface RestaurantRegistration {
 }
 
 interface Driver {
-  firstName: string;
-  lastName: string;
-  username: string;
-  startDate: string;
-  autoPWD: string;
+  driver_id: string;
+  'Full name': string;
+  phone: string;
+  employment_status: string;
+  is_available: boolean;
 }
 
 interface StaffMember {
   id: string;
-  name: string;
-  username: string;
-  role: string;
-  dateAdded: string;
+  firstname: string;
+  lastname: string;
+  status: string;
 }
 
 interface FrontDashAdminProps {
@@ -61,7 +61,7 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
   const [showAddDriverDialog, setShowAddDriverDialog] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<any>(null);
   const [deleteType, setDeleteType] = useState<'driver' | 'staff' | 'restaurant'>('driver');
-  const [newStaffForm, setNewStaffForm] = useState({ firstName: '', lastName: '', role: 'Support' });
+  const [newStaffForm, setNewStaffForm] = useState({ firstName: '', lastName: '' });
   const [newDriverForm, setNewDriverForm] = useState({ firstName: '', lastName: '' });
 
   // Data will be loaded from database
@@ -69,6 +69,40 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
   const [withdrawalRequests, setWithdrawalRequests] = useState([]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [staffMembers, setStaffMembers] = useState<StaffMember[]>([]);
+
+  // Load drivers from database
+  useEffect(() => {
+    const loadDrivers = async () => {
+      try {
+        const driversData = await getDrivers();
+        setDrivers(driversData);
+      } catch (error) {
+        console.error('Error loading drivers:', error);
+        toast.error('Failed to load drivers from database');
+      }
+    };
+
+    if (activeSection === 'driver-management') {
+      loadDrivers();
+    }
+  }, [activeSection]);
+
+  // Load staff from database
+  useEffect(() => {
+    const loadStaff = async () => {
+      try {
+        const staffData = await getStaffMembers();
+        setStaffMembers(staffData);
+      } catch (error) {
+        console.error('Error loading staff:', error);
+        toast.error('Failed to load staff from database');
+      }
+    };
+
+    if (activeSection === 'staff-management') {
+      loadStaff();
+    }
+  }, [activeSection]);
 
   // Action handlers
   const handleApproveRegistration = (id: string) => {
@@ -113,19 +147,17 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
       return;
     }
 
-    const username = newStaffForm.lastName.toLowerCase() + String(Math.floor(Math.random() * 90) + 10);
     const newStaff: StaffMember = {
       id: Date.now().toString(),
-      name: `${newStaffForm.firstName} ${newStaffForm.lastName}`,
-      username: username,
-      role: newStaffForm.role,
-      dateAdded: new Date().toLocaleDateString()
+      firstname: newStaffForm.firstName,
+      lastname: newStaffForm.lastName,
+      status: 'active'
     };
 
     setStaffMembers([...staffMembers, newStaff]);
-    setNewStaffForm({ firstName: '', lastName: '', role: 'Support' });
+    setNewStaffForm({ firstName: '', lastName: '' });
     setShowAddStaffDialog(false);
-    toast.success(`Staff member ${newStaff.name} added successfully! Username: ${username}`);
+    toast.success(`Staff member ${newStaff.firstname} ${newStaff.lastname} added successfully!`);
   };
 
   const handleAddDriver = () => {
@@ -155,13 +187,30 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
     setShowConfirmDialog(true);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (deleteType === 'driver' && itemToDelete) {
-      setDrivers(drivers.filter(d => d.username !== itemToDelete.username));
-      toast.success(`Driver ${itemToDelete.firstName} ${itemToDelete.lastName} has been removed.`);
+      setDrivers(drivers.filter(d => d.driver_id !== itemToDelete.driver_id));
+      toast.success(`Driver ${itemToDelete['Full name']} has been removed.`);
     } else if (deleteType === 'staff' && itemToDelete) {
-      setStaffMembers(staffMembers.filter(s => s.id !== itemToDelete.id));
-      toast.success(`Staff member ${itemToDelete.name} has been removed.`);
+      // Validate ID before attempting to update
+      if (!itemToDelete.id || itemToDelete.id.trim() === '') {
+        toast.error('Cannot deactivate staff member: Invalid ID');
+        setShowConfirmDialog(false);
+        setItemToDelete(null);
+        return;
+      }
+
+      try {
+        // Update status to false in database instead of deleting
+        await deleteStaffMember(itemToDelete.id);
+        // Reload staff list from database
+        const staffData = await getStaffMembers();
+        setStaffMembers(staffData);
+        toast.success(`Staff member ${itemToDelete.firstname} ${itemToDelete.lastname} has been deactivated.`);
+      } catch (error: any) {
+        console.error('Error deactivating staff member:', error);
+        toast.error(`Failed to deactivate staff member: ${error.message || 'Unknown error'}`);
+      }
     }
     setShowConfirmDialog(false);
     setItemToDelete(null);
@@ -196,16 +245,19 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
         
       case 'driver-management':
         return drivers.filter(d => 
-          d.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          d.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          d.username.toLowerCase().includes(searchTerm.toLowerCase())
+          d['Full name']?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          d.phone?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          d.employment_status?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          d.driver_id?.toLowerCase().includes(searchTerm.toLowerCase())
         );
         
       case 'staff-management':
         return staffMembers.filter(s =>
-          s.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          s.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          s.role.toLowerCase().includes(searchTerm.toLowerCase())
+          s.firstname?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          s.lastname?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          `${s.firstname} ${s.lastname}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          s.status?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          s.id?.toLowerCase().includes(searchTerm.toLowerCase())
         );
         
       default:
@@ -253,8 +305,8 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
                   </TableHeader>
                   <TableBody>
                     {filteredItems().length > 0 ? (
-                      filteredItems().map((registration: any) => (
-                        <TableRow key={registration.id}>
+                      filteredItems().map((registration: any, index: number) => (
+                        <TableRow key={registration.id || `registration-${index}`}>
                           <TableCell>{registration.id}</TableCell>
                           <TableCell>{registration.restaurantName}</TableCell>
                           <TableCell>{registration.contactInfo}</TableCell>
@@ -343,8 +395,8 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
                 </TableHeader>
                 <TableBody>
                   {filteredItems().length > 0 ? (
-                    filteredItems().map((request: any) => (
-                      <TableRow key={request.id}>
+                    filteredItems().map((request: any, index: number) => (
+                      <TableRow key={request.id || `withdrawal-${index}`}>
                         <TableCell>{request.id}</TableCell>
                         <TableCell>{request.restaurantName}</TableCell>
                         <TableCell>{request.contactInfo}</TableCell>
@@ -412,26 +464,29 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Username</TableHead>
-                    <TableHead>Role</TableHead>
-                    <TableHead>Date Added</TableHead>
+                    <TableHead>First Name</TableHead>
+                    <TableHead>Last Name</TableHead>
+                    <TableHead>Status</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredItems().length > 0 ? (
-                    filteredItems().map((staff: any) => (
-                      <TableRow key={staff.id}>
-                        <TableCell>{staff.name}</TableCell>
-                        <TableCell>{staff.username}</TableCell>
-                        <TableCell>{staff.role}</TableCell>
-                        <TableCell>{staff.dateAdded}</TableCell>
+                    filteredItems().map((staff: StaffMember, index: number) => (
+                      <TableRow key={staff.id || `staff-${index}`}>
+                        <TableCell>{staff.firstname}</TableCell>
+                        <TableCell>{staff.lastname}</TableCell>
+                        <TableCell>
+                          <Badge variant={staff.status === 'active' ? 'default' : 'secondary'}>
+                            {staff.status}
+                          </Badge>
+                        </TableCell>
                         <TableCell>
                           <Button
                             size="sm"
                             variant="destructive"
                             onClick={() => handleDelete(staff, 'staff')}
+                            disabled={!staff.id || staff.id.trim() === ''}
                           >
                             <UserX className="h-4 w-4" />
                           </Button>
@@ -440,7 +495,7 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
                     ))
                   ) : (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center text-gray-500 py-8">
+                      <TableCell colSpan={4} className="text-center text-gray-500 py-8">
                         No staff members found. Data will be loaded from the database.
                       </TableCell>
                     </TableRow>
@@ -476,23 +531,31 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>First Name</TableHead>
-                    <TableHead>Last Name</TableHead>
-                    <TableHead>Username</TableHead>
-                    <TableHead>Start Date</TableHead>
-                    <TableHead>Auto PWD</TableHead>
+                    <TableHead>Driver ID</TableHead>
+                    <TableHead>Full Name</TableHead>
+                    <TableHead>Phone</TableHead>
+                    <TableHead>Employment Status</TableHead>
+                    <TableHead>Available</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredItems().length > 0 ? (
-                    filteredItems().map((driver: any, index) => (
-                      <TableRow key={index}>
-                        <TableCell>{driver.firstName}</TableCell>
-                        <TableCell>{driver.lastName}</TableCell>
-                        <TableCell>{driver.username}</TableCell>
-                        <TableCell>{driver.startDate}</TableCell>
-                        <TableCell>{driver.autoPWD}</TableCell>
+                    filteredItems().map((driver: Driver, index: number) => (
+                      <TableRow key={driver.driver_id || `driver-${index}`}>
+                        <TableCell>{driver.driver_id}</TableCell>
+                        <TableCell>{driver['Full name']}</TableCell>
+                        <TableCell>{driver.phone}</TableCell>
+                        <TableCell>
+                          <Badge variant={driver.employment_status === 'active' ? 'default' : 'secondary'}>
+                            {driver.employment_status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={driver.is_available ? 'default' : 'secondary'}>
+                            {driver.is_available ? 'Yes' : 'No'}
+                          </Badge>
+                        </TableCell>
                         <TableCell>
                           <div className="flex gap-2">
                             <Button size="sm" variant="outline">
@@ -619,7 +682,7 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
             <DialogTitle>Confirm Deletion</DialogTitle>
             <DialogDescription>
               Are you sure you want to remove this {deleteType}?
-              {itemToDelete && (deleteType === 'staff' ? ` (${itemToDelete.name})` : ` (${itemToDelete.firstName} ${itemToDelete.lastName})`)}
+              {itemToDelete && (deleteType === 'staff' ? ` (${itemToDelete.firstname} ${itemToDelete.lastname})` : ` (${itemToDelete['Full name']})`)}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -660,19 +723,6 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
                 onChange={(e) => setNewStaffForm({...newStaffForm, lastName: e.target.value})}
                 placeholder="Enter last name"
               />
-            </div>
-            <div>
-              <Label htmlFor="staffRole">Role</Label>
-              <select 
-                id="staffRole"
-                value={newStaffForm.role}
-                onChange={(e) => setNewStaffForm({...newStaffForm, role: e.target.value})}
-                className="w-full p-2 border rounded-md"
-              >
-                <option value="Support">Support</option>
-                <option value="Manager">Manager</option>
-                <option value="Admin">Admin</option>
-              </select>
             </div>
           </div>
           <DialogFooter>

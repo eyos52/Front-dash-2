@@ -521,16 +521,56 @@ export async function updateStaffPassword(staffId: string, passwordHash: string)
 // ========== STAFF OPERATIONS ==========
 
 export async function getStaffMembers() {
+  // Query all columns to see what we get
   const { data, error } = await supabase
     .from('staffuser')
-    .select('*')
-    .order('name');
+    .select('*');
 
   if (error) {
     console.error('Error fetching staff members:', error);
+    console.error('Error details:', {
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      code: error.code
+    });
     throw error;
   }
-  return data as StaffMember[];
+
+  // Log the first staff member to see actual column structure
+  if (data && data.length > 0) {
+    console.log('Sample staff data from database:', data[0]);
+    console.log('Available columns:', Object.keys(data[0]));
+  }
+
+  // Map the data to match our interface
+  // Handle different possible column name formats
+  const mappedData = (data || [])
+    .map((staff: any, index: number) => {
+      const firstname = staff.firstname || staff.first_name || staff['first name'] || '';
+      const lastname = staff.lastname || staff.last_name || staff['last name'] || '';
+      // Status column is capitalized "Status" in the database
+      const status = staff.Status !== undefined ? staff.Status : (staff.status !== undefined ? staff.status : 'active');
+      // Try multiple possible ID column names
+      const id = staff.id || staff.staff_id || staff.user_id || staff.uuid || 
+                 (staff.firstname && staff.lastname ? `${staff.firstname}-${staff.lastname}-${index}` : `staff-${index}`);
+
+      return {
+        id: String(id), // Ensure ID is always a string
+        firstname: firstname,
+        lastname: lastname,
+        status: status
+      };
+    })
+    // Filter out staff with status = false (handle both boolean and string)
+    .filter((staff: StaffMember) => {
+      const statusValue = staff.status;
+      // Keep only staff where status is not false (boolean) or 'false' (string)
+      return statusValue !== false && statusValue !== 'false' && statusValue !== 0;
+    });
+
+  console.log('Mapped staff data (filtered):', mappedData);
+  return mappedData as StaffMember[];
 }
 
 export async function createStaffMember(staff: Omit<StaffMember, 'id' | 'date_added'>) {
@@ -555,27 +595,80 @@ export async function createStaffMember(staff: Omit<StaffMember, 'id' | 'date_ad
 }
 
 export async function deleteStaffMember(id: string) {
-  const { error } = await supabase
+  // Validate ID
+  if (!id || id.trim() === '' || id.startsWith('staff-')) {
+    throw new Error('Staff member ID is required and must be a valid database ID');
+  }
+
+  // Instead of deleting, set Status to false (column name is capitalized "Status")
+  const { data, error } = await supabase
     .from('staffuser')
-    .delete()
-    .eq('id', id);
+    .update({ Status: false })
+    .eq('id', id)
+    .select()
+    .single();
 
   if (error) {
-    console.error('Error deleting staff member:', error);
+    console.error('Error updating staff member status:', error);
+    console.error('Error details:', {
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      code: error.code,
+      id: id
+    });
     throw error;
   }
+  
+  return data;
 }
 
 // ========== DRIVER OPERATIONS ==========
 
 export async function getDrivers() {
+  // First, try to get all columns to see what the actual column names are
   const { data, error } = await supabase
     .from('drivers')
-    .select('*')
-    .order('first_name');
+    .select('*');
 
-  if (error) throw error;
-  return data as Driver[];
+  if (error) {
+    console.error('Error fetching drivers:', error);
+    console.error('Error details:', {
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      code: error.code
+    });
+    throw error;
+  }
+
+  // Log the first driver to see actual column structure
+  if (data && data.length > 0) {
+    console.log('Sample driver data from database:', data[0]);
+    console.log('Available columns:', Object.keys(data[0]));
+  }
+
+  // Map the data to match our interface
+  // Handle different possible column name formats
+  const mappedData = (data || []).map((driver: any) => {
+    // Try different possible column name variations
+    const fullName = driver['Full name'] || driver.full_name || driver.Full_name || driver['full name'] || driver.name || '';
+    const driverId = driver.driver_id || driver.id || '';
+    const phone = driver.phone || '';
+    const employmentStatus = driver.employment_status || driver.status || '';
+    const isAvailable = driver.is_available !== undefined ? driver.is_available : (driver.available !== undefined ? driver.available : true);
+
+    return {
+      driver_id: driverId,
+      'Full name': fullName,
+      phone: phone,
+      employment_status: employmentStatus,
+      is_available: isAvailable
+    };
+  });
+
+  console.log('Mapped drivers data:', mappedData);
+  return mappedData as Driver[];
 }
 
 export async function createDriver(driver: Omit<Driver, 'id' | 'start_date'>) {
