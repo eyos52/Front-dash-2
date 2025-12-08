@@ -12,8 +12,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { validateEmail, validatePhone, formatPhone } from './utils/validation';
 import { useMenuItems } from '../lib/utils/hooks';
-import { getRestaurants, getOrdersByRestaurant } from '../lib/services/database';
-import { Loader2 } from 'lucide-react';
+import { getRestaurants, getOrdersByRestaurant, confirmOrder } from '../lib/services/database';
+import { Loader2, CheckCircle2 } from 'lucide-react';
 import { Order as SupabaseOrder } from '../lib/supabase';
 import { 
   Store, 
@@ -40,12 +40,19 @@ interface MenuItem {
 
 interface Order {
   id: string;
-  status: 'Arrived' | 'In transit' | 'Preparing' | 'Ready' | 'Pending';
-  date: string;
-  time: string;
+  status: 'Arrived' | 'In transit' | 'Preparing' | 'Ready' | 'Pending' | 'Confirmed';
+  date: string; // Kept for backward compatibility
+  time: string; // Kept for backward compatibility
+  placedAt?: string; // Combined date and time from placed_at column
   customer: string;
   deliverer: string;
   total: string;
+  orderItems?: Array<{
+    item_name: string;
+    quantity: number;
+    price: number;
+  }>;
+  originalOrderId?: string; // Store the order_id from database for confirmation
 }
 
 interface DayHours {
@@ -303,6 +310,83 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersError, setOrdersError] = useState<string | null>(null);
 
+  // Helper function to map database orders to component format
+  const mapOrderToComponent = (order: any): Order => {
+    const orderId = order.order_id || order.order_number || order.id?.substring(0, 8) || 'Unknown';
+    let placedAtStr = 'N/A';
+    // Use placed_at from orders table, fallback to created_at if placed_at is not available
+    const placedAtDate = order.placed_at || order.created_at;
+    if (placedAtDate) {
+      const orderDate = new Date(placedAtDate);
+      placedAtStr = orderDate.toLocaleString('en-US', { 
+        month: 'short', 
+        day: 'numeric', 
+        year: 'numeric',
+        hour: 'numeric', 
+        minute: '2-digit', 
+        hour12: true 
+      });
+    }
+    let displayStatus: 'Arrived' | 'In transit' | 'Preparing' | 'Ready' | 'Pending' | 'Confirmed' = 'Pending';
+    if (order.status === 'Completed') {
+      displayStatus = 'Arrived';
+    } else if (order.status === 'Pending') {
+      displayStatus = 'Pending';
+    } else if (order.status === 'confirmed') {
+      displayStatus = 'Confirmed'; // Confirmed orders show as "Confirmed"
+    } else if (order.status === 'out_for_delivery') {
+      displayStatus = 'In transit';
+    } else if (order.status === 'ready') {
+      displayStatus = 'Ready';
+    } else if (order.status === 'preparing') {
+      displayStatus = 'Preparing';
+    }
+    // Use customer_first_name and customer_last_name from orders table
+    const customerName = order.customer_first_name || order.customer_last_name
+      ? `${order.customer_first_name || ''} ${order.customer_last_name || ''}`.trim()
+      : (order.email ? order.email.split('@')[0] : 'Unknown');
+    
+    // Extract order_items - handle both array format and nested format
+    let orderItems: any[] = [];
+    if (order.order_items) {
+      if (Array.isArray(order.order_items)) {
+        orderItems = order.order_items;
+      } else {
+        orderItems = [order.order_items];
+      }
+    }
+    
+    console.log(`Order ${orderId} has ${orderItems.length} items:`, orderItems);
+    
+    // Use subtotal from orders table if available, otherwise calculate from order items
+    let orderTotal = order.subtotal || order.total;
+    if (!orderTotal && orderItems.length > 0) {
+      const calculatedTotal = orderItems.reduce((sum: number, item: any) => {
+        // Use unit_price_snapshot if available, otherwise use price from menu_items join, or fallback to item.price
+        const price = item.unit_price_snapshot || 
+                     item.menu_items?.price || 
+                     item.price || 
+                     0;
+        const qty = item.quantity || 0;
+        return sum + (price * qty);
+      }, 0);
+      orderTotal = calculatedTotal;
+    }
+    
+    return {
+      id: orderId,
+      status: displayStatus,
+      date: placedAtStr, // Store placed_at as date for compatibility
+      time: placedAtStr, // Store placed_at as time for compatibility
+      placedAt: placedAtStr, // New field for combined date/time
+      customer: customerName,
+      deliverer: order.driver_id || 'N/A',
+      total: orderTotal ? `$${orderTotal.toFixed(2)}` : 'N/A',
+      orderItems: orderItems,
+      originalOrderId: order.order_id || orderId
+    };
+  };
+
   // Fetch all orders from database (both pending and completed)
   useEffect(() => {
     async function fetchOrders() {
@@ -316,43 +400,7 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
         const allOrders = await getOrdersByRestaurant(restaurantId);
         
         // Map Supabase orders to component format
-        const mappedOrders: Order[] = allOrders.map((order: SupabaseOrder) => {
-          // Use order_id (like "FD0001") or fallback to order_number or id
-          const orderId = order.order_id || order.order_number || order.id?.substring(0, 8) || 'Unknown';
-          
-          // Parse date from created_at if available, otherwise use current date
-          let dateStr = 'N/A';
-          let timeStr = 'N/A';
-          if (order.created_at) {
-            const orderDate = new Date(order.created_at);
-            dateStr = orderDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-            timeStr = orderDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
-          }
-          
-          // Map status: "Pending" -> "Pending", "Completed" -> "Arrived"
-          let displayStatus: 'Arrived' | 'In transit' | 'Preparing' | 'Ready' | 'Pending' = 'Pending';
-          if (order.status === 'Completed') {
-            displayStatus = 'Arrived';
-          } else if (order.status === 'Pending') {
-            displayStatus = 'Pending';
-          } else if (order.status === 'out_for_delivery') {
-            displayStatus = 'In transit';
-          } else if (order.status === 'ready') {
-            displayStatus = 'Ready';
-          } else if (order.status === 'preparing' || order.status === 'confirmed') {
-            displayStatus = 'Preparing';
-          }
-          
-          return {
-            id: orderId,
-            status: displayStatus,
-            date: dateStr,
-            time: timeStr,
-            customer: order.email || 'Unknown', // Use email as customer identifier
-            deliverer: order.driver_id || 'N/A', // Use driver_id from orders table
-            total: order.total ? `$${order.total.toFixed(2)}` : 'N/A'
-          };
-        });
+        const mappedOrders: Order[] = allOrders.map(mapOrderToComponent);
         
         setOrders(mappedOrders);
       } catch (error) {
@@ -512,8 +560,23 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
     );
 
     return activeOrderTab === 'active' 
-      ? filtered.filter(order => order.status === 'Pending' || order.status === 'Preparing' || order.status === 'In transit' || order.status === 'Ready')
-      : filtered.filter(order => order.status === 'Arrived');
+      ? filtered.filter(order => order.status !== 'Arrived') // Show all orders except Completed (Arrived) in Active tab
+      : filtered.filter(order => order.status === 'Arrived'); // Only show Completed orders in History tab
+  };
+
+  const handleConfirmOrder = async (orderId: string) => {
+    try {
+      await confirmOrder(orderId);
+      alert('Order confirmed successfully!');
+      // Refresh orders
+      const allOrders = await getOrdersByRestaurant(restaurantId || '');
+      const mappedOrders: Order[] = allOrders.map(mapOrderToComponent);
+      setOrders(mappedOrders);
+      // Order stays in Active tab until status is "Completed"
+    } catch (error) {
+      console.error('Error confirming order:', error);
+      alert('Failed to confirm order. Please try again.');
+    }
   };
 
   const renderContent = () => {
@@ -562,11 +625,11 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
                             <TableRow>
                               <TableHead>Order ID</TableHead>
                               <TableHead>Status</TableHead>
-                              <TableHead>Date</TableHead>
-                              <TableHead>Time</TableHead>
-                              <TableHead>Customer</TableHead>
-                              <TableHead>Deliverer</TableHead>
+                              <TableHead>Placed At</TableHead>
+                              <TableHead>Customer Name</TableHead>
+                              <TableHead>Order Items</TableHead>
                               <TableHead>Total</TableHead>
+                              <TableHead>Action</TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
@@ -576,18 +639,53 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
                                   <TableCell className="font-medium">{order.id}</TableCell>
                                   <TableCell>
                                     <Badge variant={
-                                      order.status === 'Arrived' ? 'default' :
+                                      order.status === 'Confirmed' ? 'default' :
+                                      order.status === 'Preparing' ? 'secondary' :
                                       order.status === 'In transit' ? 'secondary' :
-                                      order.status === 'Preparing' ? 'destructive' : 'outline'
+                                      order.status === 'Ready' ? 'secondary' :
+                                      'outline'
                                     }>
                                       {order.status}
                                     </Badge>
                                   </TableCell>
-                                  <TableCell>{order.date}</TableCell>
-                                  <TableCell>{order.time}</TableCell>
+                                  <TableCell>{order.placedAt || order.date}</TableCell>
                                   <TableCell>{order.customer}</TableCell>
-                                  <TableCell>{order.deliverer || 'Pending'}</TableCell>
-                                  <TableCell>{order.total}</TableCell>
+                                  <TableCell>
+                                    <div className="max-w-xs">
+                                      {order.orderItems && order.orderItems.length > 0 ? (
+                                        <div className="space-y-1">
+                                          {order.orderItems.map((item: any, idx: number) => {
+                                            // Get item name from menu_items join, or fallback to item_name_snapshot, or item_name
+                                            const itemName = item.menu_items?.name || 
+                                                           item.item_name_snapshot || 
+                                                           item.item_name || 
+                                                           'Unknown Item';
+                                            return (
+                                              <div key={idx} className="text-sm">
+                                                {itemName} × {item.quantity}
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      ) : (
+                                        <span className="text-gray-400 text-sm">No items</span>
+                                      )}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell className="font-semibold">{order.total}</TableCell>
+                                  <TableCell>
+                                    {order.status === 'Pending' && (
+                                      <Button
+                                        size="sm"
+                                        onClick={() => handleConfirmOrder(order.originalOrderId || order.id)}
+                                        className="bg-green-600 hover:bg-green-700 text-white border border-green-700 font-semibold shadow-sm"
+                                        style={{ backgroundColor: '#16a34a', color: 'white' }}
+                                      >
+                                        <CheckCircle2 className="h-4 w-4 mr-1" />
+                                        Confirm
+                                      </Button>
+                                    )}
+                                  </TableCell>
                                 </TableRow>
                               ))
                             ) : (
@@ -625,8 +723,7 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
                             <TableRow>
                               <TableHead>Order ID</TableHead>
                               <TableHead>Status</TableHead>
-                              <TableHead>Date</TableHead>
-                              <TableHead>Time</TableHead>
+                              <TableHead>Placed At</TableHead>
                               <TableHead>Customer</TableHead>
                               <TableHead>Deliverer</TableHead>
                               <TableHead>Total</TableHead>
@@ -642,8 +739,7 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
                                       {order.status}
                                     </Badge>
                                   </TableCell>
-                                  <TableCell>{order.date}</TableCell>
-                                  <TableCell>{order.time}</TableCell>
+                                  <TableCell>{order.placedAt || order.date}</TableCell>
                                   <TableCell>{order.customer}</TableCell>
                                   <TableCell>{order.deliverer}</TableCell>
                                   <TableCell>{order.total}</TableCell>
@@ -651,7 +747,7 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
                               ))
                             ) : (
                               <TableRow>
-                                <TableCell colSpan={7} className="text-center text-gray-500 py-8">
+                                <TableCell colSpan={6} className="text-center text-gray-500 py-8">
                                   No completed orders found.
                                 </TableCell>
                               </TableRow>

@@ -70,6 +70,11 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
   const [pendingOrders, setPendingOrders] = useState<OrderWithDetails[]>([]);
   const [activeOrders, setActiveOrders] = useState<OrderWithDetails[]>([]);
   const [deliveredOrders, setDeliveredOrders] = useState<OrderWithDetails[]>([]);
+  
+  // Debug: Log pendingOrders whenever it changes
+  useEffect(() => {
+    console.log('pendingOrders state updated:', pendingOrders.length, pendingOrders);
+  }, [pendingOrders]);
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<OrderWithDetails | null>(null);
   const [showOrderDetails, setShowOrderDetails] = useState(false);
@@ -90,31 +95,83 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
 
   const staffId = staffUser?.id || '';
 
-  // Load data on mount
+  // Load data on mount and set up polling for new orders
   useEffect(() => {
     if (staffId) {
       loadData();
       loadStaffMember();
+      
+      // Poll for new orders every 5 seconds to catch confirmed orders from restaurant portal
+      const interval = setInterval(() => {
+        loadData();
+      }, 5000);
+      
+      return () => clearInterval(interval);
     }
   }, [staffId]);
 
   const loadData = async () => {
     try {
       setIsLoading(true);
-      const [pending, active, delivered, driversList] = await Promise.all([
-        getPendingOrders(),
+      console.log('Loading data for staff dashboard...');
+      console.log('Calling getPendingOrders()...');
+      
+      let pending;
+      try {
+        pending = await getPendingOrders();
+        console.log('getPendingOrders() completed successfully');
+      } catch (pendingError: any) {
+        console.error('ERROR in getPendingOrders():', pendingError);
+        console.error('Error details:', pendingError.message, pendingError.stack);
+        pending = [];
+      }
+      
+      const [active, delivered, driversList] = await Promise.all([
         getStaffActiveOrders(staffId),
         getStaffDeliveredOrders(staffId),
         getDrivers()
       ]);
       
-      setPendingOrders(pending as OrderWithDetails[]);
+      console.log('=== PENDING ORDERS RESULT ===');
+      console.log('Pending orders received:', pending?.length || 0);
+      console.log('Pending orders type:', typeof pending);
+      console.log('Pending orders is array?', Array.isArray(pending));
+      if (pending && pending.length > 0) {
+        console.log('Pending orders data:', pending);
+        console.log('First pending order:', pending[0]);
+        console.log('First pending order status:', pending[0].status);
+      } else {
+        console.warn('⚠️ No pending orders returned from getPendingOrders()');
+        console.warn('pending value:', pending);
+        console.warn('pending === null?', pending === null);
+        console.warn('pending === undefined?', pending === undefined);
+      }
+      console.log('=== END PENDING ORDERS RESULT ===');
+      console.log('Active orders received:', active?.length || 0);
+      console.log('Delivered orders received:', delivered?.length || 0);
+      
+      // Ensure orders have the right structure for display
+      const formattedPending = (pending || []).map((order: any) => ({
+        ...order,
+        id: order.id || order.order_id, // Ensure id exists for key prop
+        order_number: order.order_number || order.order_id, // Map order_id to order_number for display
+      }));
+      
+      console.log('Formatted pending orders:', formattedPending.length, formattedPending);
+      console.log('Setting pendingOrders state with:', formattedPending);
+      setPendingOrders(formattedPending as OrderWithDetails[]);
+      
+      // Force a re-render check
+      setTimeout(() => {
+        console.log('State after setPendingOrders:', formattedPending.length);
+      }, 100);
       setActiveOrders(active as OrderWithDetails[]);
       setDeliveredOrders(delivered as OrderWithDetails[]);
       setDrivers(driversList.filter(d => d.status === 'active'));
     } catch (error: any) {
       console.error('Error loading data:', error);
-      toast.error('Failed to load data');
+      console.error('Error stack:', error.stack);
+      toast.error('Failed to load data: ' + (error.message || 'Unknown error'));
     } finally {
       setIsLoading(false);
     }
@@ -179,8 +236,14 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
     
     try {
       setIsLoading(true);
-      await assignOrderToStaff(firstOrder.id, staffId);
-      toast.success(`Order ${firstOrder.order_number} retrieved successfully`);
+      // Use order_id if available, otherwise use id
+      const orderIdToUse = firstOrder.order_id || firstOrder.id;
+      if (!orderIdToUse) {
+        toast.error('Order ID not found');
+        return;
+      }
+      await assignOrderToStaff(orderIdToUse, staffId);
+      toast.success(`Order ${firstOrder.order_number || firstOrder.order_id} retrieved successfully`);
       await loadData();
     } catch (error: any) {
       console.error('Error retrieving order:', error);
@@ -407,7 +470,10 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
       {/* Order Queue Preview */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>Order Queue (Preview)</CardTitle>
+          <div className="flex items-center gap-2">
+            <CardTitle>Order Queue (Preview)</CardTitle>
+            <span className="text-sm text-gray-500">({pendingOrders.length} orders)</span>
+          </div>
           <Button variant="ghost" size="sm" onClick={() => setActiveView('orders')}>
             View All <ArrowRight className="h-4 w-4 ml-2" />
           </Button>
@@ -424,26 +490,36 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
               </TableRow>
             </TableHeader>
             <TableBody>
-              {pendingOrders.slice(0, 5).map((order) => (
-                <TableRow key={order.id}>
-                  <TableCell className="font-medium">{order.order_number}</TableCell>
-                  <TableCell>{order.restaurants?.name || 'Unknown'}</TableCell>
-                  <TableCell>{formatTimeAgo(order.created_at)}</TableCell>
-                  <TableCell>—</TableCell>
-                  <TableCell>
-                    <Button variant="ghost" size="sm" onClick={() => handleViewOrderDetails(order)}>
-                      Details
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {pendingOrders.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-center text-gray-500">
-                    No orders in queue
-                  </TableCell>
-                </TableRow>
-              )}
+              {(() => {
+                console.log('Rendering Order Queue table. pendingOrders.length:', pendingOrders.length);
+                console.log('pendingOrders data:', pendingOrders);
+                if (pendingOrders.length > 0) {
+                  return pendingOrders.slice(0, 5).map((order, index) => {
+                    console.log(`Rendering order ${index}:`, order);
+                    return (
+                      <TableRow key={order.id || order.order_id || `order-${index}`}>
+                        <TableCell className="font-medium">{order.order_number || order.order_id || 'N/A'}</TableCell>
+                        <TableCell>{order.restaurants?.name || 'Unknown'}</TableCell>
+                        <TableCell>{order.placed_at ? formatTimeAgo(order.placed_at) : (order.created_at ? formatTimeAgo(order.created_at) : '—')}</TableCell>
+                        <TableCell>—</TableCell>
+                        <TableCell>
+                          <Button variant="ghost" size="sm" onClick={() => handleViewOrderDetails(order)}>
+                            Details
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  });
+                } else {
+                  return (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-gray-500">
+                        No orders in queue (pendingOrders.length = {pendingOrders.length})
+                      </TableCell>
+                    </TableRow>
+                  );
+                }
+              })()}
             </TableBody>
           </Table>
         </CardContent>
@@ -600,8 +676,9 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
 
       {/* Order Queue */}
       <Card>
-        <CardHeader>
+        <CardHeader className="flex items-center justify-between">
           <CardTitle>Order Queue</CardTitle>
+          <span className="text-sm text-gray-500">({pendingOrders.length} orders)</span>
         </CardHeader>
         <CardContent>
           <Table>
@@ -615,26 +692,35 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
               </TableRow>
             </TableHeader>
             <TableBody>
-              {pendingOrders.map((order) => (
-                <TableRow key={order.id}>
-                  <TableCell className="font-medium">{order.order_number}</TableCell>
-                  <TableCell>{order.restaurants?.name || 'Unknown'}</TableCell>
-                  <TableCell>{formatTimeAgo(order.created_at)}</TableCell>
-                  <TableCell>—</TableCell>
-                  <TableCell>
-                    <Button variant="ghost" size="sm" onClick={() => handleViewOrderDetails(order)}>
-                      Details
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {pendingOrders.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-center text-gray-500">
-                    No orders in queue
-                  </TableCell>
-                </TableRow>
-              )}
+              {(() => {
+                console.log('Rendering full Order Queue. pendingOrders.length:', pendingOrders.length);
+                if (pendingOrders.length > 0) {
+                  return pendingOrders.map((order, index) => {
+                    console.log(`Rendering order ${index}:`, order);
+                    return (
+                      <TableRow key={order.id || order.order_id || `order-${index}`}>
+                        <TableCell className="font-medium">{order.order_number || order.order_id || 'N/A'}</TableCell>
+                        <TableCell>{order.restaurants?.name || 'Unknown'}</TableCell>
+                        <TableCell>{order.placed_at ? formatTimeAgo(order.placed_at) : (order.created_at ? formatTimeAgo(order.created_at) : '—')}</TableCell>
+                        <TableCell>—</TableCell>
+                        <TableCell>
+                          <Button variant="ghost" size="sm" onClick={() => handleViewOrderDetails(order)}>
+                            Details
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  });
+                } else {
+                  return (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-gray-500">
+                        No orders in queue (pendingOrders.length = {pendingOrders.length})
+                      </TableCell>
+                    </TableRow>
+                  );
+                }
+              })()}
             </TableBody>
           </Table>
         </CardContent>
@@ -918,7 +1004,7 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label className="text-sm font-medium text-gray-500">Order ID</Label>
-                  <p className="font-semibold">{selectedOrder.order_number}</p>
+                  <p className="font-semibold">{selectedOrder.order_number || selectedOrder.order_id || 'N/A'}</p>
                 </div>
                 <div>
                   <Label className="text-sm font-medium text-gray-500">Restaurant</Label>
@@ -926,7 +1012,7 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
                 </div>
                 <div>
                   <Label className="text-sm font-medium text-gray-500">Placed At</Label>
-                  <p>{new Date(selectedOrder.created_at).toLocaleString()}</p>
+                  <p>{selectedOrder.placed_at ? new Date(selectedOrder.placed_at).toLocaleString() : (selectedOrder.created_at ? new Date(selectedOrder.created_at).toLocaleString() : 'N/A')}</p>
                 </div>
                 {selectedOrder.estimated_delivery && (
                   <div>
@@ -966,14 +1052,26 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {selectedOrder.order_items.map((item) => (
-                        <TableRow key={item.id}>
-                          <TableCell>{item.item_name}</TableCell>
-                          <TableCell>{item.quantity}</TableCell>
-                          <TableCell>${item.price.toFixed(2)}</TableCell>
-                          <TableCell>${(item.price * item.quantity).toFixed(2)}</TableCell>
-                        </TableRow>
-                      ))}
+                      {selectedOrder.order_items.map((item: any, idx: number) => {
+                        // Get item name from menu_items join, or fallback to item_name_snapshot, or item_name
+                        const itemName = item.menu_items?.name || 
+                                       item.item_name_snapshot || 
+                                       item.item_name || 
+                                       'Unknown Item';
+                        // Get price from unit_price_snapshot, menu_items join, or item.price
+                        const itemPrice = item.unit_price_snapshot || 
+                                        item.menu_items?.price || 
+                                        item.price || 
+                                        0;
+                        return (
+                          <TableRow key={item.id || item.order_item_id || idx}>
+                            <TableCell>{itemName}</TableCell>
+                            <TableCell>{item.quantity}</TableCell>
+                            <TableCell>${itemPrice.toFixed(2)}</TableCell>
+                            <TableCell>${(itemPrice * item.quantity).toFixed(2)}</TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>

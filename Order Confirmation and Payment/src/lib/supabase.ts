@@ -50,6 +50,8 @@ export interface Order {
   id?: string; // UUID if exists
   order_id?: string; // Text ID like "FD0001", "FD0002" - primary key in your database
   customer_id?: string;
+  customer_first_name?: string; // Customer's first name from orders table
+  customer_last_name?: string; // Customer's last name from orders table
   restaurant_id: string; // Text ID like "001", "002", "003"
   driver_id?: string; // Text ID like "D1", "D2" or null
   staff_id?: string; // Staff member ID
@@ -61,7 +63,7 @@ export interface Order {
   zip_code?: string;
   phone?: string;
   email?: string;
-  subtotal?: number;
+  subtotal?: number; // Subtotal from orders table
   delivery_fee?: number;
   service_charge?: number;
   tax?: number;
@@ -70,15 +72,22 @@ export interface Order {
   estimated_delivery?: string;
   delivered_at?: string;
   created_at?: string;
+  placed_at?: string; // Timestamp when order was placed
+  order_items?: OrderItem[]; // Related order items
 }
 
 export interface OrderItem {
-  id: string;
-  order_id: string;
-  item_name: string;
-  item_id: number;
-  price: number;
+  id?: string;
+  order_items?: number; // Primary key ID
+  order_id: string; // Text ID like "FD0001", "FD0002"
+  menu_item_id?: string; // Text ID like "01", "02"
+  item_name_snapshot?: string; // Snapshot of item name at time of order
+  unit_price_snapshot?: number; // Snapshot of price at time of order
   quantity: number;
+  // Legacy fields for compatibility
+  item_name?: string;
+  item_id?: number;
+  price?: number;
 }
 
 export interface RestaurantRegistration {

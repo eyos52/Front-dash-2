@@ -134,14 +134,54 @@ export async function updateOrderStatus(id: string, status: Order['status']) {
   return data as Order;
 }
 
+// Get order items for a specific order, joined with menu_items to get item names
+export async function getOrderItems(orderId: string) {
+  const { data, error } = await supabase
+    .from('order_items')
+    .select(`
+      *,
+      menu_items (
+        menu_item_id,
+        name,
+        price,
+        description
+      )
+    `)
+    .eq('order_id', orderId);
+
+  if (error) {
+    console.error('Supabase error fetching order items:', error);
+    throw new Error(`Failed to fetch order items: ${error.message}`);
+  }
+  
+  return (data || []) as any[];
+}
+
 // Get orders by restaurant (for restaurant portal)
 export async function getOrdersByRestaurant(restaurantId: string, status?: string) {
   console.log('Fetching orders for restaurant_id:', restaurantId, 'status:', status);
   
   // Query orders by restaurant_id (text field like "001", "002", "003")
+  // Join with order_items, and then join order_items with menu_items to get item names
   let query = supabase
     .from('orders')
-    .select('*')
+    .select(`
+      *,
+      order_items (
+        order_item_id,
+        order_id,
+        menu_item_id,
+        item_name_snapshot,
+        unit_price_snapshot,
+        quantity,
+        menu_items (
+          menu_item_id,
+          name,
+          price,
+          description
+        )
+      )
+    `)
     .eq('restaurant_id', restaurantId);
   
   // Filter by status if provided
@@ -175,23 +215,178 @@ export async function getOrdersByRestaurant(restaurantId: string, status?: strin
   }
   
   console.log('Fetched orders:', data?.length || 0, data);
-  return (data || []) as Order[];
+  
+  // If order_items weren't included in the join, fetch them separately for each order
+  const ordersWithItems = await Promise.all(
+    (data || []).map(async (order: any) => {
+      // If order_items is not an array or is empty, try fetching separately
+      if (!order.order_items || !Array.isArray(order.order_items) || order.order_items.length === 0) {
+        try {
+          const orderId = order.order_id || order.order_number || order.id;
+          if (orderId) {
+            console.log(`Fetching order items separately for order ${orderId}`);
+            const items = await getOrderItems(orderId);
+            order.order_items = items;
+          }
+        } catch (err) {
+          console.error(`Error fetching items for order ${order.order_id}:`, err);
+          order.order_items = [];
+        }
+      }
+      return order;
+    })
+  );
+  
+  return ordersWithItems as any[];
+}
+
+// Confirm order (update status from Pending to confirmed/preparing)
+export async function confirmOrder(orderId: string) {
+  console.log('Confirming order:', orderId);
+  
+  const { data, error } = await supabase
+    .from('orders')
+    .update({ 
+      status: 'confirmed'
+    })
+    .eq('order_id', orderId)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error confirming order:', error);
+    throw new Error(`Failed to confirm order: ${error.message}`);
+  }
+  
+  console.log('Order confirmed:', data);
+  return data as Order;
 }
 
 // Get pending orders (order queue) - for staff interface
+// Includes both "pending" and "confirmed" orders (confirmed orders from restaurant portal)
 export async function getPendingOrders() {
+  console.log('🔵 getPendingOrders() called');
+  console.log('🔵 Fetching pending orders for queue...');
+  
+  try {
+    // First, try a simple query to see if we can get any orders at all
+    console.log('🔵 Running simple test query...');
+    const { data: simpleTest, error: simpleError } = await supabase
+      .from('orders')
+      .select('order_id, status')
+      .in('status', ['pending', 'confirmed'])
+      .limit(5);
+    
+    console.log('🔵 Simple test query result:', simpleTest?.length || 0);
+    console.log('🔵 Simple test data:', simpleTest);
+    if (simpleError) {
+      console.error('🔴 Simple test query error:', simpleError);
+      console.error('🔴 Error code:', simpleError.code);
+      console.error('🔴 Error message:', simpleError.message);
+    }
+  } catch (testErr) {
+    console.error('🔴 Exception in simple test query:', testErr);
+  }
+  
+  // Query for orders with status 'pending' or 'confirmed' (both lowercase)
+  // Show all confirmed orders regardless of staff_id assignment
   const { data, error } = await supabase
     .from('orders')
     .select(`
       *,
-      restaurants (id, name, address, city, state),
-      order_items (*)
+      order_items (
+        order_item_id,
+        order_id,
+        menu_item_id,
+        item_name_snapshot,
+        unit_price_snapshot,
+        quantity,
+        menu_items (
+          menu_item_id,
+          name,
+          price,
+          description
+        )
+      )
     `)
-    .eq('status', 'pending')
+    .in('status', ['pending', 'confirmed'])
     .order('created_at', { ascending: true });
 
-  if (error) throw error;
-  return data;
+  if (error) {
+    console.error('Supabase error fetching pending orders:', error);
+    throw error;
+  }
+  
+  console.log('Orders fetched with status filter (pending/confirmed):', data?.length || 0);
+  if (data && data.length > 0) {
+    console.log('First order sample:', {
+      order_id: data[0].order_id,
+      status: data[0].status,
+      staff_id: data[0].staff_id,
+      restaurant_id: data[0].restaurant_id
+    });
+  } else {
+    // Debug: Check what orders exist with these statuses
+    console.log('No orders found. Checking what orders exist in database...');
+    const { data: allOrders, error: allError } = await supabase
+      .from('orders')
+      .select('order_id, status, staff_id, restaurant_id')
+      .in('status', ['pending', 'confirmed'])
+      .limit(20);
+    
+    if (allError) {
+      console.error('Error fetching debug orders:', allError);
+    } else {
+      console.log('Debug: Found orders with pending/confirmed status:', allOrders?.length || 0);
+      console.log('Sample orders:', allOrders);
+      
+      // Also check all statuses to see what exists
+      const { data: statusCheck, error: statusError } = await supabase
+        .from('orders')
+        .select('order_id, status')
+        .limit(50);
+      
+      if (!statusError && statusCheck) {
+        const uniqueStatuses = [...new Set(statusCheck.map(o => o.status))];
+        console.log('All unique statuses found in orders table:', uniqueStatuses);
+        console.log('Count of orders with "confirmed" status:', statusCheck.filter(o => o.status === 'confirmed').length);
+        console.log('Count of orders with "pending" status:', statusCheck.filter(o => o.status === 'pending').length);
+      }
+    }
+  }
+  
+  // Fetch restaurant details separately since we need to join on restaurant_id (text field)
+  const ordersWithRestaurants = await Promise.all(
+    (data || []).map(async (order: any) => {
+      if (order.restaurant_id) {
+        try {
+          const { data: restaurant, error: restError } = await supabase
+            .from('restaurants')
+            .select('restaurant_id, name, address, city, state')
+            .eq('restaurant_id', order.restaurant_id)
+            .single();
+          
+          if (restError) {
+            console.error(`Error fetching restaurant ${order.restaurant_id} for order ${order.order_id}:`, restError);
+            order.restaurants = null;
+          } else {
+            order.restaurants = restaurant;
+          }
+        } catch (err) {
+          console.error(`Exception fetching restaurant for order ${order.order_id}:`, err);
+          order.restaurants = null;
+        }
+      } else {
+        console.warn(`Order ${order.order_id} has no restaurant_id`);
+        order.restaurants = null;
+      }
+      return order;
+    })
+  );
+  
+  console.log('Final orders with restaurants:', ordersWithRestaurants?.length || 0);
+  
+  return ordersWithRestaurants;
 }
 
 // Get orders assigned to a staff member
@@ -231,17 +426,28 @@ export async function getStaffDeliveredOrders(staffId: string) {
 
 // Assign order to staff member (retrieve from queue)
 export async function assignOrderToStaff(orderId: string, staffId: string) {
-  const { data, error } = await supabase
+  console.log('Assigning order to staff:', orderId, staffId);
+  
+  // Try to match by order_id first (text field like "FD0001"), then by id (UUID)
+  let query = supabase
     .from('orders')
     .update({ 
       staff_id: staffId,
       status: 'confirmed'
-    })
-    .eq('id', orderId)
+    });
+  
+  // Try order_id first (text like "FD0001"), then fallback to id (UUID)
+  const { data, error } = await query
+    .or(`order_id.eq.${orderId},id.eq.${orderId}`)
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    console.error('Error assigning order to staff:', error);
+    throw error;
+  }
+  
+  console.log('Order assigned to staff:', data);
   return data as Order;
 }
 
@@ -281,19 +487,22 @@ export async function confirmDelivery(orderId: string, deliveredAt: string) {
 // Get staff member by username
 export async function getStaffByUsername(username: string) {
   const { data, error } = await supabase
-    .from('staff_members')
+    .from('staffuser')
     .select('*')
     .eq('username', username)
     .single();
 
-  if (error) throw error;
+  if (error) {
+    console.error('Error fetching staff member:', error);
+    throw error;
+  }
   return data as StaffMember;
 }
 
 // Update staff password
 export async function updateStaffPassword(staffId: string, passwordHash: string) {
   const { data, error } = await supabase
-    .from('staff_members')
+    .from('staffuser')
     .update({ 
       password_hash: passwordHash,
       first_time_login: false
@@ -302,7 +511,10 @@ export async function updateStaffPassword(staffId: string, passwordHash: string)
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    console.error('Error updating staff password:', error);
+    throw error;
+  }
   return data as StaffMember;
 }
 
@@ -310,11 +522,14 @@ export async function updateStaffPassword(staffId: string, passwordHash: string)
 
 export async function getStaffMembers() {
   const { data, error } = await supabase
-    .from('staff_members')
+    .from('staffuser')
     .select('*')
     .order('name');
 
-  if (error) throw error;
+  if (error) {
+    console.error('Error fetching staff members:', error);
+    throw error;
+  }
   return data as StaffMember[];
 }
 
@@ -323,7 +538,7 @@ export async function createStaffMember(staff: Omit<StaffMember, 'id' | 'date_ad
     `${staff.name.split(' ')[1].toLowerCase()}${Math.floor(Math.random() * 90) + 10}`;
   
   const { data, error } = await supabase
-    .from('staff_members')
+    .from('staffuser')
     .insert([{
       ...staff,
       username,
@@ -332,17 +547,23 @@ export async function createStaffMember(staff: Omit<StaffMember, 'id' | 'date_ad
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    console.error('Error creating staff member:', error);
+    throw error;
+  }
   return data as StaffMember;
 }
 
 export async function deleteStaffMember(id: string) {
   const { error } = await supabase
-    .from('staff_members')
+    .from('staffuser')
     .delete()
     .eq('id', id);
 
-  if (error) throw error;
+  if (error) {
+    console.error('Error deleting staff member:', error);
+    throw error;
+  }
 }
 
 // ========== DRIVER OPERATIONS ==========
