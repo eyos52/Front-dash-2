@@ -101,9 +101,41 @@ export function RestaurantDetail({
   // Check if restaurant is currently open
   const isRestaurantOpen = (): boolean => {
     const now = new Date();
+    const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
     const currentTime = now.getHours() * 100 + now.getMinutes(); // Convert to HHMM format
     
-    // Parse opening and closing times
+    // Special handling for Best Burgers
+    if (restaurant.name.toLowerCase().includes('burger') || restaurant.supabaseId === '003') {
+      // Best Burgers: Mon-Fri: 9am-12am, Sat-Sun: Closed
+      if (currentDay === 0 || currentDay === 6) { // Sunday (0) or Saturday (6)
+        return false; // Closed on weekends
+      } else if (currentDay >= 1 && currentDay <= 5) { // Monday-Friday
+        // 9:00 AM (900) to 12:00 AM next day (midnight, represented as 0)
+        const openingTime = 900; // 9:00 AM
+        // Restaurant is open if current time is >= 9am OR it's before 1 AM (meaning after midnight but still part of previous day)
+        return currentTime >= openingTime || (currentTime >= 0 && currentTime < 100);
+      }
+    }
+    
+    // Special handling for Pizza Only
+    if (restaurant.name.toLowerCase().includes('pizza') || restaurant.supabaseId === '002') {
+      // Pizza Only: Mon-Thu: 12pm-12am, Fri: Closed, Sat-Sun: 10am-12am
+      if (currentDay === 5) { // Friday
+        return false; // Closed on Friday
+      } else if (currentDay >= 1 && currentDay <= 4) { // Monday-Thursday
+        // 12:00 PM (1200) to 12:00 AM next day (midnight, represented as 0 or 2400)
+        const openingTime = 1200; // 12:00 PM (noon)
+        // Restaurant is open if current time is >= noon OR it's before 1 AM (meaning after midnight but still part of previous day)
+        return currentTime >= openingTime || (currentTime >= 0 && currentTime < 100);
+      } else { // Saturday (6) or Sunday (0)
+        // 10:00 AM to 12:00 AM next day (midnight)
+        const openingTime = 1000; // 10:00 AM
+        // Restaurant is open if current time is >= 10am OR it's before 1 AM (meaning after midnight but still part of previous day)
+        return currentTime >= openingTime || (currentTime >= 0 && currentTime < 100);
+      }
+    }
+    
+    // Parse opening and closing times for other restaurants
     const parseTime = (timeStr: string): number => {
       const [time, period] = timeStr.split(' ');
       let [hours, minutes] = time.split(':').map(Number);
@@ -313,8 +345,29 @@ export function RestaurantDetail({
                 <div className="flex justify-between">
                   <span className="text-gray-600">Hours</span>
                   <div className="text-right">
-                    <div className="font-medium">{restaurant.openingTime} - {restaurant.closingTime}</div>
-                    <div className={`text-xs ${isRestaurantOpen() ? 'text-green-600' : 'text-red-600'}`}>
+                    {(restaurant.name.toLowerCase().includes('chicken') || restaurant.supabaseId === '001') ? (
+                      <>
+                        <div className="font-medium">9:00 AM - 9:00 PM</div>
+                        <div className="text-xs text-gray-500">Mon-Fri (Regular Hours)</div>
+                        <div className="text-xs text-gray-500 mt-1">Sat-Sun: 8:00 AM - 10:00 PM</div>
+                      </>
+                    ) : (restaurant.name.toLowerCase().includes('burger') || restaurant.supabaseId === '003') ? (
+                      <>
+                        <div className="font-medium">9:00 AM - 12:00 AM</div>
+                        <div className="text-xs text-gray-500">Mon-Fri</div>
+                        <div className="text-xs text-red-600 mt-1">Sat-Sun: Closed</div>
+                      </>
+                    ) : (restaurant.name.toLowerCase().includes('pizza') || restaurant.supabaseId === '002') ? (
+                      <>
+                        <div className="font-medium">12:00 PM - 12:00 AM</div>
+                        <div className="text-xs text-gray-500">Mon-Thu</div>
+                        <div className="text-xs text-red-600 mt-1">Fri: Closed</div>
+                        <div className="text-xs text-gray-500 mt-1">Sat-Sun: 10:00 AM - 12:00 AM</div>
+                      </>
+                    ) : (
+                      <div className="font-medium">{restaurant.openingTime} - {restaurant.closingTime}</div>
+                    )}
+                    <div className={`text-xs mt-1 ${isRestaurantOpen() ? 'text-green-600' : 'text-red-600'}`}>
                       {isRestaurantOpen() ? 'Open now' : 'Closed'}
                     </div>
                   </div>

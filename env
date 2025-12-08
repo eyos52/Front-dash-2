@@ -1,0 +1,9 @@
+# Supabase Configuration
+# Get these from: Supabase Dashboard → Settings → API → API Keys
+
+# Project URL (from Settings → API → Data API)
+VITE_SUPABASE_URL=https://nwpirlnemuovfgtwwzim.supabase.co
+
+# anon public key (from Settings → API → API Keys → Legacy anon, service_role API keys)
+# Click "Copy" next to the "anon public" key and paste it here
+VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im53cGlybG5lbXVvdmZndHd3emltIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjE0OTM3NjYsImV4cCI6MjA3NzA2OTc2Nn0.2E0Tk9xV3CQSCmMIf5095iSed3UDro5FjkF-ymxqvDQ

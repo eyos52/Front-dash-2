@@ -290,7 +290,25 @@ export function LandingPage({ onNavigate, onOrderFood, onRestaurantSelect, cart,
                       </div>
 
                       <div className="flex items-center justify-between">
-                        <p className="text-xs text-gray-500">Open {restaurant.openingTime} - {restaurant.closingTime}</p>
+                        {(restaurant.name.toLowerCase().includes('chicken') || restaurant.supabaseId === '001') ? (
+                          <div className="text-xs text-gray-500">
+                            <p>9:00 AM - 9:00 PM (Mon-Fri)</p>
+                            <p className="mt-0.5">8:00 AM - 10:00 PM (Sat-Sun)</p>
+                          </div>
+                        ) : (restaurant.name.toLowerCase().includes('burger') || restaurant.supabaseId === '003') ? (
+                          <div className="text-xs text-gray-500">
+                            <p>9:00 AM - 12:00 AM (Mon-Fri)</p>
+                            <p className="mt-0.5 text-red-600">Sat-Sun: Closed</p>
+                          </div>
+                        ) : (restaurant.name.toLowerCase().includes('pizza') || restaurant.supabaseId === '002') ? (
+                          <div className="text-xs text-gray-500">
+                            <p>12:00 PM - 12:00 AM (Mon-Thu)</p>
+                            <p className="mt-0.5 text-red-600">Fri: Closed</p>
+                            <p className="mt-0.5">10:00 AM - 12:00 AM (Sat-Sun)</p>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-gray-500">Open {restaurant.openingTime} - {restaurant.closingTime}</p>
+                        )}
                       </div>
                     </CardContent>
                   </Card>
