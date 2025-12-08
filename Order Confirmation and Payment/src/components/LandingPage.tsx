@@ -8,12 +8,8 @@ import { useRestaurants } from '../lib/utils/hooks';
 import { 
   Search, 
   MapPin, 
-  Star, 
   Clock,
-  ShoppingCart,
   Utensils,
-  Coffee,
-  Wine,
   Home,
   Loader2
 } from 'lucide-react';
@@ -54,11 +50,7 @@ export function LandingPage({ onNavigate, onOrderFood, onRestaurantSelect, cart,
   const categories = [
     { id: 'all', name: 'All', icon: Home },
     { id: 'search', name: 'Search', icon: Search },
-    { id: 'grocery', name: 'Grocery', icon: ShoppingCart },
-    { id: 'retail', name: 'Retail', icon: ShoppingCart },
-    { id: 'alcohol', name: 'Alcohol', icon: Wine },
     { id: 'restaurants', name: 'Restaurants', icon: Utensils },
-    { id: 'coffee', name: 'Coffee & Tea', icon: Coffee },
   ];
 
   // Helper function to convert 24-hour time to 12-hour format
@@ -95,24 +87,15 @@ export function LandingPage({ onNavigate, onOrderFood, onRestaurantSelect, cart,
     // For now, all restaurants go into the restaurants category
     // You can add logic later to categorize based on cuisine_type
     return {
-      restaurants: mappedRestaurants,
-      grocery: [],
-      retail: [],
-      alcohol: [],
-      coffee: []
+      restaurants: mappedRestaurants
     };
   }, [mappedRestaurants]);
 
   // Get current stores based on selected category
   const getCurrentStores = () => {
     if (selectedCategory === 'all') {
-      // Show a mix from all categories
-      return [
-        ...allStores.restaurants,
-        ...allStores.grocery,
-        ...allStores.retail,
-        ...allStores.coffee
-      ];
+      // Show all restaurants
+      return allStores.restaurants;
     }
     return allStores[selectedCategory] || allStores.restaurants;
   };
@@ -275,10 +258,6 @@ export function LandingPage({ onNavigate, onOrderFood, onRestaurantSelect, cart,
                       
                       <div className="flex items-center gap-4 text-sm text-gray-600 mb-2">
                         <div className="flex items-center gap-1">
-                          <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
-                          <span className="font-medium">{restaurant.rating}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
                           <Clock className="h-4 w-4" />
                           <span>{restaurant.deliveryTime}</span>
                         </div>
@@ -290,18 +269,29 @@ export function LandingPage({ onNavigate, onOrderFood, onRestaurantSelect, cart,
                       </div>
 
                       <div className="flex items-center justify-between">
-                        <p className="text-xs text-gray-500">Open {restaurant.openingTime} - {restaurant.closingTime}</p>
+                        {(restaurant.name.toLowerCase().includes('chicken') || restaurant.supabaseId === '001') ? (
+                          <div className="text-xs text-gray-500">
+                            <p>9:00 AM - 9:00 PM (Mon-Fri)</p>
+                            <p className="mt-0.5">8:00 AM - 10:00 PM (Sat-Sun)</p>
+                          </div>
+                        ) : (restaurant.name.toLowerCase().includes('burger') || restaurant.supabaseId === '003') ? (
+                          <div className="text-xs text-gray-500">
+                            <p>9:00 AM - 12:00 AM (Mon-Fri)</p>
+                            <p className="mt-0.5 text-red-600">Sat-Sun: Closed</p>
+                          </div>
+                        ) : (restaurant.name.toLowerCase().includes('pizza') || restaurant.supabaseId === '002') ? (
+                          <div className="text-xs text-gray-500">
+                            <p>12:00 PM - 12:00 AM (Mon-Thu)</p>
+                            <p className="mt-0.5 text-red-600">Fri: Closed</p>
+                            <p className="mt-0.5">10:00 AM - 12:00 AM (Sat-Sun)</p>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-gray-500">Open {restaurant.openingTime} - {restaurant.closingTime}</p>
+                        )}
                       </div>
                     </CardContent>
                   </Card>
                 ))}
-              </div>
-
-              {/* Load More */}
-              <div className="text-center mt-8">
-                <Button variant="outline" className="px-8">
-                  Load More Restaurants
-                </Button>
               </div>
             </>
           ) : (

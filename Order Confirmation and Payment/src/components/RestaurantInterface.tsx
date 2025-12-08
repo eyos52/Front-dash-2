@@ -95,16 +95,56 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
   const [validationErrors, setValidationErrors] = useState<{ [key: string]: string }>({});
   const [showWithdrawDialog, setShowWithdrawDialog] = useState(false);
   
+  // Get initial hours based on restaurantId (will be overridden by database data if available)
+  const getInitialHours = (): WeeklyHours => {
+    if (restaurantId === '003') {
+      // Best Burgers: Mon-Fri: 9am-12am, Sat-Sun: Closed
+      return {
+        monday: { isOpen: true, openTime: '09:00', closeTime: '00:00' },
+        tuesday: { isOpen: true, openTime: '09:00', closeTime: '00:00' },
+        wednesday: { isOpen: true, openTime: '09:00', closeTime: '00:00' },
+        thursday: { isOpen: true, openTime: '09:00', closeTime: '00:00' },
+        friday: { isOpen: true, openTime: '09:00', closeTime: '00:00' },
+        saturday: { isOpen: false, openTime: '09:00', closeTime: '00:00' },
+        sunday: { isOpen: false, openTime: '09:00', closeTime: '00:00' }
+      };
+    } else if (restaurantId === '001') {
+      // All Chicken Meals: Mon-Fri: 9am-9pm, Sat-Sun: 8am-10pm
+      return {
+        monday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+        tuesday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+        wednesday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+        thursday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+        friday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+        saturday: { isOpen: true, openTime: '08:00', closeTime: '22:00' },
+        sunday: { isOpen: true, openTime: '08:00', closeTime: '22:00' }
+      };
+    } else if (restaurantId === '002') {
+      // Pizza Only: Mon-Thu: 12pm-12am, Fri: Closed, Sat-Sun: 10am-12am
+      return {
+        monday: { isOpen: true, openTime: '12:00', closeTime: '00:00' },
+        tuesday: { isOpen: true, openTime: '12:00', closeTime: '00:00' },
+        wednesday: { isOpen: true, openTime: '12:00', closeTime: '00:00' },
+        thursday: { isOpen: true, openTime: '12:00', closeTime: '00:00' },
+        friday: { isOpen: false, openTime: '12:00', closeTime: '00:00' },
+        saturday: { isOpen: true, openTime: '10:00', closeTime: '00:00' },
+        sunday: { isOpen: true, openTime: '10:00', closeTime: '00:00' }
+      };
+    }
+    // Default hours for other restaurants
+    return {
+      monday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+      tuesday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+      wednesday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+      thursday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+      friday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+      saturday: { isOpen: true, openTime: '08:00', closeTime: '22:00' },
+      sunday: { isOpen: true, openTime: '08:00', closeTime: '22:00' }
+    };
+  };
+
   // Weekly operating hours state
-  const [weeklyHours, setWeeklyHours] = useState<WeeklyHours>({
-    monday: { isOpen: true, openTime: '11:00', closeTime: '22:00' },
-    tuesday: { isOpen: true, openTime: '11:00', closeTime: '22:00' },
-    wednesday: { isOpen: true, openTime: '11:00', closeTime: '22:00' },
-    thursday: { isOpen: true, openTime: '11:00', closeTime: '22:00' },
-    friday: { isOpen: true, openTime: '11:00', closeTime: '23:00' },
-    saturday: { isOpen: true, openTime: '11:00', closeTime: '23:00' },
-    sunday: { isOpen: true, openTime: '12:00', closeTime: '21:00' }
-  });
+  const [weeklyHours, setWeeklyHours] = useState<WeeklyHours>(getInitialHours());
   
   const [restaurant, setRestaurant] = useState<RestaurantData>({
     name: '',
@@ -121,7 +161,41 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
   const { menuItems: supabaseMenuItems, loading: menuLoading, error: menuError } = useMenuItems(restaurantId || null);
   
   // Helper function to parse operating_hours text field
-  const parseOperatingHours = (operatingHoursText: string | undefined): WeeklyHours => {
+  const parseOperatingHours = (operatingHoursText: string | undefined, restaurantId?: string, restaurantName?: string): WeeklyHours => {
+    // Best Burgers default hours: Mon-Fri: 9am-12am, Sat-Sun: Closed
+    const bestBurgersHours: WeeklyHours = {
+      monday: { isOpen: true, openTime: '09:00', closeTime: '00:00' },
+      tuesday: { isOpen: true, openTime: '09:00', closeTime: '00:00' },
+      wednesday: { isOpen: true, openTime: '09:00', closeTime: '00:00' },
+      thursday: { isOpen: true, openTime: '09:00', closeTime: '00:00' },
+      friday: { isOpen: true, openTime: '09:00', closeTime: '00:00' },
+      saturday: { isOpen: false, openTime: '09:00', closeTime: '00:00' },
+      sunday: { isOpen: false, openTime: '09:00', closeTime: '00:00' }
+    };
+
+    // All Chicken Meals default hours: Mon-Fri: 9am-9pm, Sat-Sun: 8am-10pm
+    const allChickenHours: WeeklyHours = {
+      monday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+      tuesday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+      wednesday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+      thursday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+      friday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
+      saturday: { isOpen: true, openTime: '08:00', closeTime: '22:00' },
+      sunday: { isOpen: true, openTime: '08:00', closeTime: '22:00' }
+    };
+
+    // Pizza Only default hours: Mon-Thu: 12pm-12am, Fri: Closed, Sat-Sun: 10am-12am
+    const pizzaOnlyHours: WeeklyHours = {
+      monday: { isOpen: true, openTime: '12:00', closeTime: '00:00' },
+      tuesday: { isOpen: true, openTime: '12:00', closeTime: '00:00' },
+      wednesday: { isOpen: true, openTime: '12:00', closeTime: '00:00' },
+      thursday: { isOpen: true, openTime: '12:00', closeTime: '00:00' },
+      friday: { isOpen: false, openTime: '12:00', closeTime: '00:00' },
+      saturday: { isOpen: true, openTime: '10:00', closeTime: '00:00' },
+      sunday: { isOpen: true, openTime: '10:00', closeTime: '00:00' }
+    };
+
+    // Default hours for other restaurants
     const defaultHours: WeeklyHours = {
       monday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
       tuesday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
@@ -132,9 +206,19 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
       sunday: { isOpen: true, openTime: '08:00', closeTime: '22:00' }
     };
 
+    // Determine which default hours to use
+    let defaultHoursToUse = defaultHours;
+    if (restaurantId === '003' || restaurantName?.toLowerCase().includes('burger')) {
+      defaultHoursToUse = bestBurgersHours;
+    } else if (restaurantId === '001' || restaurantName?.toLowerCase().includes('chicken')) {
+      defaultHoursToUse = allChickenHours;
+    } else if (restaurantId === '002' || restaurantName?.toLowerCase().includes('pizza')) {
+      defaultHoursToUse = pizzaOnlyHours;
+    }
+
     if (!operatingHoursText) {
       console.log('No operating_hours text provided, using defaults');
-      return defaultHours;
+      return defaultHoursToUse;
     }
 
     console.log('Parsing operating_hours:', operatingHoursText);
@@ -184,7 +268,7 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
       return result;
     };
 
-    const parsedHours = { ...defaultHours };
+    const parsedHours = { ...defaultHoursToUse };
     
     // Split by newlines, but also handle if it's all on one line with separators
     let lines = operatingHoursText.split('\n').filter(line => line.trim());
@@ -277,8 +361,12 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
 
           // Parse and set operating hours
           if (restaurantData.operating_hours) {
-            const parsedHours = parseOperatingHours(restaurantData.operating_hours);
+            const parsedHours = parseOperatingHours(restaurantData.operating_hours, restaurantData.restaurant_id, restaurantData.name);
             setWeeklyHours(parsedHours);
+          } else {
+            // Set default hours based on restaurant
+            const defaultHours = parseOperatingHours(undefined, restaurantData.restaurant_id, restaurantData.name);
+            setWeeklyHours(defaultHours);
           }
         }
       } catch (error) {

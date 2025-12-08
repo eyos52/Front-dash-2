@@ -522,7 +522,7 @@ export function OrderConfirmation({ onOrderComplete, cart, clearCart }: OrderCon
                       <Label htmlFor="cardNumber">Credit/Debit Card</Label>
                       <Input
                         id="cardNumber"
-                        placeholder="4123 5678 9012 3456"
+                        placeholder="0000 0000 0000 0000"
                         value={paymentDetails.cardNumber}
                         onChange={(e) => {
                           const formatted = formatCardNumber(e.target.value);
