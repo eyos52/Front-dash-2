@@ -40,27 +40,64 @@ export async function getRestaurantById(id: string) {
   return data as Restaurant;
 }
 
+// Helper function to generate a random unique restaurant_id
+async function generateUniqueRestaurantId(): Promise<string> {
+  const maxRetries = 10;
+  let attempts = 0;
+  
+  while (attempts < maxRetries) {
+    // Generate a random restaurant_id using timestamp + random string
+    // Format: REST-{timestamp}-{random6chars}
+    const timestamp = Date.now();
+    const randomStr = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const candidateId = `REST-${timestamp}-${randomStr}`;
+    
+    // Check if this ID exists in restaurants table
+    const { data: existingRestaurants, error: restaurantError } = await supabase
+      .from('restaurants')
+      .select('restaurant_id')
+      .eq('restaurant_id', candidateId)
+      .limit(1);
+    
+    // Check if this ID exists in requests table
+    const { data: existingRequests, error: requestError } = await supabase
+      .from('requests')
+      .select('restaurant_id')
+      .eq('kind', 'registration')
+      .eq('restaurant_id', candidateId)
+      .limit(1);
+    
+    // If there was a real error (not just "not found"), log it but continue
+    if (restaurantError) {
+      console.warn('Error checking restaurant_id in restaurants table:', restaurantError);
+    }
+    if (requestError) {
+      console.warn('Error checking restaurant_id in requests table:', requestError);
+    }
+    
+    // If ID doesn't exist in either table (empty arrays), it's unique
+    const restaurantExists = existingRestaurants && existingRestaurants.length > 0;
+    const requestExists = existingRequests && existingRequests.length > 0;
+    
+    if (!restaurantExists && !requestExists) {
+      return candidateId;
+    }
+    
+    attempts++;
+  }
+  
+  // Fallback: if we've tried maxRetries times, use longer random string as last resort
+  const fallbackId = `REST-${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+  console.warn(`Generated fallback restaurant_id after ${maxRetries} attempts: ${fallbackId}`);
+  return fallbackId;
+}
+
 export async function createRestaurantRegistration(registration: Omit<RestaurantRegistration, 'id' | 'submission_date' | 'status' | 'decision_date' | 'reviewed_by'>) {
-  // Generate random ID
+  // Generate random ID for the request itself
   const randomId = `REQ-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
   
-  // Generate restaurant_id in format like "001", "002", etc.
-  // First, get the highest existing restaurant_id number
-  const { data: existingRestaurants } = await supabase
-    .from('restaurants')
-    .select('restaurant_id')
-    .order('restaurant_id', { ascending: false })
-    .limit(1);
-  
-  let restaurantIdNum = 1;
-  if (existingRestaurants && existingRestaurants.length > 0) {
-    const lastId = existingRestaurants[0].restaurant_id;
-    const match = lastId.match(/^(\d+)$/);
-    if (match) {
-      restaurantIdNum = parseInt(match[1], 10) + 1;
-    }
-  }
-  const randomRestaurantId = String(restaurantIdNum).padStart(3, '0'); // Format: "001", "002", etc.
+  // Generate unique random restaurant_id
+  const randomRestaurantId = await generateUniqueRestaurantId();
   
   // Combine owner first and last name for contact_name
   const contactName = `${registration.owner_first_name} ${registration.owner_last_name}`.trim();
@@ -187,7 +224,7 @@ async function createRestaurantFromRequest(request: any): Promise<void> {
     restaurant_id: request.restaurant_id,
     registration_status: 'approved',
     is_active: true,
-    withdrawal_status: null, // Set to null or 'none' based on your schema
+    // withdrawal_status is now nullable, so we can omit it or set to null
     name: request.proposed_name || 'New Restaurant',
     contact_name: request.proposed_contact_name || 'Restaurant Owner',
     contact_email: request.proposed_contact_email || '',
