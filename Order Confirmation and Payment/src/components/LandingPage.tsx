@@ -8,12 +8,8 @@ import { useRestaurants } from '../lib/utils/hooks';
 import { 
   Search, 
   MapPin, 
-  Star, 
   Clock,
-  ShoppingCart,
   Utensils,
-  Coffee,
-  Wine,
   Home,
   Loader2
 } from 'lucide-react';
@@ -54,11 +50,7 @@ export function LandingPage({ onNavigate, onOrderFood, onRestaurantSelect, cart,
   const categories = [
     { id: 'all', name: 'All', icon: Home },
     { id: 'search', name: 'Search', icon: Search },
-    { id: 'grocery', name: 'Grocery', icon: ShoppingCart },
-    { id: 'retail', name: 'Retail', icon: ShoppingCart },
-    { id: 'alcohol', name: 'Alcohol', icon: Wine },
     { id: 'restaurants', name: 'Restaurants', icon: Utensils },
-    { id: 'coffee', name: 'Coffee & Tea', icon: Coffee },
   ];
 
   // Helper function to convert 24-hour time to 12-hour format
@@ -95,24 +87,15 @@ export function LandingPage({ onNavigate, onOrderFood, onRestaurantSelect, cart,
     // For now, all restaurants go into the restaurants category
     // You can add logic later to categorize based on cuisine_type
     return {
-      restaurants: mappedRestaurants,
-      grocery: [],
-      retail: [],
-      alcohol: [],
-      coffee: []
+      restaurants: mappedRestaurants
     };
   }, [mappedRestaurants]);
 
   // Get current stores based on selected category
   const getCurrentStores = () => {
     if (selectedCategory === 'all') {
-      // Show a mix from all categories
-      return [
-        ...allStores.restaurants,
-        ...allStores.grocery,
-        ...allStores.retail,
-        ...allStores.coffee
-      ];
+      // Show all restaurants
+      return allStores.restaurants;
     }
     return allStores[selectedCategory] || allStores.restaurants;
   };
@@ -275,10 +258,6 @@ export function LandingPage({ onNavigate, onOrderFood, onRestaurantSelect, cart,
                       
                       <div className="flex items-center gap-4 text-sm text-gray-600 mb-2">
                         <div className="flex items-center gap-1">
-                          <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
-                          <span className="font-medium">{restaurant.rating}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
                           <Clock className="h-4 w-4" />
                           <span>{restaurant.deliveryTime}</span>
                         </div>
@@ -313,13 +292,6 @@ export function LandingPage({ onNavigate, onOrderFood, onRestaurantSelect, cart,
                     </CardContent>
                   </Card>
                 ))}
-              </div>
-
-              {/* Load More */}
-              <div className="text-center mt-8">
-                <Button variant="outline" className="px-8">
-                  Load More Restaurants
-                </Button>
               </div>
             </>
           ) : (
