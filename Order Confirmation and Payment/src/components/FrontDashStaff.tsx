@@ -83,6 +83,13 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
   const [searchOrderId, setSearchOrderId] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   
+  const getDriverName = (driverId?: string, driverNameFromOrder?: string) => {
+    if (driverNameFromOrder) return driverNameFromOrder;
+    if (!driverId) return '—';
+    const driver = drivers.find(d => d.driver_id === driverId);
+    return driver?.['Full name'] || (driver as any)?.full_name || (driver as any)?.name || driverId;
+  };
+
   // Settings state
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -819,8 +826,8 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
                   <TableCell>
                     {order.driver_id 
                       ? (() => {
-                          const driver = drivers.find(d => d.driver_id === order.driver_id);
-                          return driver ? `${driver['Full name']} (On trip)` : order.driver_id;
+                            const name = getDriverName(order.driver_id, (order as any)?.driver_name);
+                          return name ? `${name} (On trip)` : order.driver_id;
                         })()
                       : (
                         <Button 

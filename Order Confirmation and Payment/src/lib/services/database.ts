@@ -781,24 +781,72 @@ export async function getPendingOrders() {
     pendingOrders.map(async (order: any) => {
       if (order.restaurant_id) {
         try {
-          const { data: restaurant, error: restError } = await supabase
+          console.log(`🔍 Fetching restaurant for order ${order.order_id}, restaurant_id: ${order.restaurant_id}`);
+          
+          // Try fetching with restaurant_id first
+          let { data: restaurant, error: restError } = await supabase
             .from('restaurants')
-            .select('restaurant_id, name, address, city, state')
+            .select('*') // Select all columns to see what we get
             .eq('restaurant_id', order.restaurant_id)
             .single();
           
+          // If that fails, try with id column as fallback
+          if (restError && restError.code === 'PGRST116') {
+            console.log(`⚠️ No restaurant found with restaurant_id, trying id column...`);
+            const { data: restaurantById, error: idError } = await supabase
+              .from('restaurants')
+              .select('*')
+              .eq('id', order.restaurant_id)
+              .single();
+            
+            if (!idError && restaurantById) {
+              restaurant = restaurantById;
+              restError = null;
+            } else {
+              restError = idError;
+            }
+          }
+          
           if (restError) {
-            console.error(`Error fetching restaurant ${order.restaurant_id} for order ${order.order_id}:`, restError);
+            console.error(`❌ Error fetching restaurant ${order.restaurant_id} for order ${order.order_id}:`, restError);
+            console.error(`❌ Error details:`, {
+              message: restError.message,
+              code: restError.code,
+              details: restError.details,
+              hint: restError.hint
+            });
+            // Log what columns exist in restaurants table
+            const { data: sampleRestaurant } = await supabase
+              .from('restaurants')
+              .select('*')
+              .limit(1);
+            if (sampleRestaurant && sampleRestaurant.length > 0) {
+              console.log(`📋 Sample restaurant columns:`, Object.keys(sampleRestaurant[0]));
+              console.log(`📋 Sample restaurant data:`, sampleRestaurant[0]);
+            }
             order.restaurants = null;
+          } else if (restaurant) {
+            console.log(`✅ Found restaurant for order ${order.order_id}:`, restaurant);
+            console.log(`✅ Restaurant name:`, restaurant.name || restaurant.Name || 'NO NAME COLUMN FOUND');
+            console.log(`✅ Restaurant columns:`, Object.keys(restaurant));
+            // Map restaurant data - handle different possible column names
+            order.restaurants = {
+              restaurant_id: restaurant.restaurant_id || restaurant.id,
+              name: restaurant.name || restaurant.Name || restaurant.restaurant_name || 'Unknown',
+              address: restaurant.address || restaurant.street1 || restaurant.Address,
+              city: restaurant.city || restaurant.City,
+              state: restaurant.state || restaurant.State
+            };
           } else {
-            order.restaurants = restaurant;
+            console.warn(`⚠️ No restaurant found with restaurant_id: ${order.restaurant_id} for order ${order.order_id}`);
+            order.restaurants = null;
           }
         } catch (err) {
-          console.error(`Exception fetching restaurant for order ${order.order_id}:`, err);
+          console.error(`❌ Exception fetching restaurant for order ${order.order_id}:`, err);
           order.restaurants = null;
         }
       } else {
-        console.warn(`Order ${order.order_id} has no restaurant_id`);
+        console.warn(`⚠️ Order ${order.order_id} has no restaurant_id`);
         order.restaurants = null;
       }
       return order;
@@ -807,6 +855,11 @@ export async function getPendingOrders() {
   
   console.log('✅ Returning', ordersWithRestaurants.length, 'orders with restaurant details');
   console.log('✅ Order IDs being returned:', ordersWithRestaurants.map((o: any) => o.order_id));
+  console.log('✅ Restaurant names:', ordersWithRestaurants.map((o: any) => ({
+    order_id: o.order_id,
+    restaurant_id: o.restaurant_id,
+    restaurant_name: o.restaurants?.name || 'NULL'
+  })));
   
   // CRITICAL: Make sure we're actually returning the orders, not an empty array
   if (ordersWithRestaurants.length === 0 && pendingOrders.length > 0) {
@@ -861,22 +914,69 @@ export async function getStaffActiveOrders(staffId: string) {
   // Fetch restaurant details separately (like in getPendingOrders)
   const ordersWithRestaurants = await Promise.all(
     (data || []).map(async (order: any) => {
+      // Attach driver name (even if driver is not currently available)
+      if (order.driver_id) {
+        try {
+          const { data: driver, error: driverError } = await supabase
+            .from('drivers')
+            .select('driver_id, full_name')
+            .eq('driver_id', order.driver_id)
+            .single();
+          if (!driverError && driver) {
+            order.driver_name = driver.full_name || driver.driver_id;
+          }
+        } catch (err) {
+          console.error(`❌ Exception fetching driver for order ${order.order_id}:`, err);
+        }
+      }
+
       if (order.restaurant_id) {
         try {
-          const { data: restaurant, error: restError } = await supabase
+          console.log(`🔍 Fetching restaurant for active order ${order.order_id}, restaurant_id: ${order.restaurant_id}`);
+          
+          // Try fetching with restaurant_id first
+          let { data: restaurant, error: restError } = await supabase
             .from('restaurants')
-            .select('restaurant_id, name, address, city, state')
+            .select('*') // Select all columns to see what we get
             .eq('restaurant_id', order.restaurant_id)
             .single();
           
+          // If that fails, try with id column as fallback
+          if (restError && restError.code === 'PGRST116') {
+            console.log(`⚠️ No restaurant found with restaurant_id, trying id column...`);
+            const { data: restaurantById, error: idError } = await supabase
+              .from('restaurants')
+              .select('*')
+              .eq('id', order.restaurant_id)
+              .single();
+            
+            if (!idError && restaurantById) {
+              restaurant = restaurantById;
+              restError = null;
+            } else {
+              restError = idError;
+            }
+          }
+          
           if (restError) {
-            console.error(`Error fetching restaurant ${order.restaurant_id} for order ${order.order_id}:`, restError);
+            console.error(`❌ Error fetching restaurant ${order.restaurant_id} for order ${order.order_id}:`, restError);
             order.restaurants = null;
+          } else if (restaurant) {
+            console.log(`✅ Found restaurant for active order ${order.order_id}:`, restaurant.name || restaurant.Name || 'NO NAME');
+            // Map restaurant data - handle different possible column names
+            order.restaurants = {
+              restaurant_id: restaurant.restaurant_id || restaurant.id,
+              name: restaurant.name || restaurant.Name || restaurant.restaurant_name || 'Unknown',
+              address: restaurant.address || restaurant.street1 || restaurant.Address,
+              city: restaurant.city || restaurant.City,
+              state: restaurant.state || restaurant.State
+            };
           } else {
-            order.restaurants = restaurant;
+            console.warn(`⚠️ No restaurant found with restaurant_id: ${order.restaurant_id} for order ${order.order_id}`);
+            order.restaurants = null;
           }
         } catch (err) {
-          console.error(`Exception fetching restaurant for order ${order.order_id}:`, err);
+          console.error(`❌ Exception fetching restaurant for order ${order.order_id}:`, err);
           order.restaurants = null;
         }
       } else {
@@ -918,22 +1018,69 @@ export async function getStaffDeliveredOrders(staffId: string) {
   // Fetch restaurant details separately (like in getPendingOrders)
   const ordersWithRestaurants = await Promise.all(
     (data || []).map(async (order: any) => {
+      // Attach driver name (even if driver is not currently available)
+      if (order.driver_id) {
+        try {
+          const { data: driver, error: driverError } = await supabase
+            .from('drivers')
+            .select('driver_id, full_name')
+            .eq('driver_id', order.driver_id)
+            .single();
+          if (!driverError && driver) {
+            order.driver_name = driver.full_name || driver.driver_id;
+          }
+        } catch (err) {
+          console.error(`❌ Exception fetching driver for delivered order ${order.order_id}:`, err);
+        }
+      }
+
       if (order.restaurant_id) {
         try {
-          const { data: restaurant, error: restError } = await supabase
+          console.log(`🔍 Fetching restaurant for delivered order ${order.order_id}, restaurant_id: ${order.restaurant_id}`);
+          
+          // Try fetching with restaurant_id first
+          let { data: restaurant, error: restError } = await supabase
             .from('restaurants')
-            .select('restaurant_id, name, address, city, state')
+            .select('*') // Select all columns to see what we get
             .eq('restaurant_id', order.restaurant_id)
             .single();
           
+          // If that fails, try with id column as fallback
+          if (restError && restError.code === 'PGRST116') {
+            console.log(`⚠️ No restaurant found with restaurant_id, trying id column...`);
+            const { data: restaurantById, error: idError } = await supabase
+              .from('restaurants')
+              .select('*')
+              .eq('id', order.restaurant_id)
+              .single();
+            
+            if (!idError && restaurantById) {
+              restaurant = restaurantById;
+              restError = null;
+            } else {
+              restError = idError;
+            }
+          }
+          
           if (restError) {
-            console.error(`Error fetching restaurant ${order.restaurant_id} for order ${order.order_id}:`, restError);
+            console.error(`❌ Error fetching restaurant ${order.restaurant_id} for order ${order.order_id}:`, restError);
             order.restaurants = null;
+          } else if (restaurant) {
+            console.log(`✅ Found restaurant for delivered order ${order.order_id}:`, restaurant.name || restaurant.Name || 'NO NAME');
+            // Map restaurant data - handle different possible column names
+            order.restaurants = {
+              restaurant_id: restaurant.restaurant_id || restaurant.id,
+              name: restaurant.name || restaurant.Name || restaurant.restaurant_name || 'Unknown',
+              address: restaurant.address || restaurant.street1 || restaurant.Address,
+              city: restaurant.city || restaurant.City,
+              state: restaurant.state || restaurant.State
+            };
           } else {
-            order.restaurants = restaurant;
+            console.warn(`⚠️ No restaurant found with restaurant_id: ${order.restaurant_id} for order ${order.order_id}`);
+            order.restaurants = null;
           }
         } catch (err) {
-          console.error(`Exception fetching restaurant for order ${order.order_id}:`, err);
+          console.error(`❌ Exception fetching restaurant for order ${order.order_id}:`, err);
           order.restaurants = null;
         }
       } else {
