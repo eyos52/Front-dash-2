@@ -12,10 +12,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { validateEmail, validatePhone, formatPhone } from './utils/validation';
 import { useMenuItems } from '../lib/utils/hooks';
-import { getRestaurants, getOrdersByRestaurant, confirmOrder, createWithdrawalRequest } from '../lib/services/database';
+import { getRestaurants, getOrdersByRestaurant, confirmOrder, createWithdrawalRequest, updateRestaurantOperatingHours } from '../lib/services/database';
+import { supabase } from '../lib/supabase';
 import { toast } from 'sonner@2.0.3';
 import { Loader2, CheckCircle2 } from 'lucide-react';
 import { Order as SupabaseOrder } from '../lib/supabase';
+import { parseOperatingHours, WeeklyHours } from '../lib/utils/operatingHours';
 import { 
   Store, 
   Plus, 
@@ -56,22 +58,6 @@ interface Order {
   originalOrderId?: string; // Store the order_id from database for confirmation
 }
 
-interface DayHours {
-  isOpen: boolean;
-  openTime: string;
-  closeTime: string;
-}
-
-interface WeeklyHours {
-  monday: DayHours;
-  tuesday: DayHours;
-  wednesday: DayHours;
-  thursday: DayHours;
-  friday: DayHours;
-  saturday: DayHours;
-  sunday: DayHours;
-}
-
 interface RestaurantData {
   name: string;
   address: string;
@@ -94,6 +80,8 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
   const [searchTerm, setSearchTerm] = useState('');
   const [validationErrors, setValidationErrors] = useState<{ [key: string]: string }>({});
   const [showWithdrawDialog, setShowWithdrawDialog] = useState(false);
+  const [hoursStatus, setHoursStatus] = useState<{ type: 'success' | 'error' | null; message?: string }>({ type: null });
+  const [hoursSaving, setHoursSaving] = useState(false);
   
   // Get initial hours based on restaurantId (will be overridden by database data if available)
   const getInitialHours = (): WeeklyHours => {
@@ -160,174 +148,6 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
   // Fetch menu items from database
   const { menuItems: supabaseMenuItems, loading: menuLoading, error: menuError } = useMenuItems(restaurantId || null);
   
-  // Helper function to parse operating_hours text field
-  const parseOperatingHours = (operatingHoursText: string | undefined, restaurantId?: string, restaurantName?: string): WeeklyHours => {
-    // Best Burgers default hours: Mon-Fri: 9am-12am, Sat-Sun: Closed
-    const bestBurgersHours: WeeklyHours = {
-      monday: { isOpen: true, openTime: '09:00', closeTime: '00:00' },
-      tuesday: { isOpen: true, openTime: '09:00', closeTime: '00:00' },
-      wednesday: { isOpen: true, openTime: '09:00', closeTime: '00:00' },
-      thursday: { isOpen: true, openTime: '09:00', closeTime: '00:00' },
-      friday: { isOpen: true, openTime: '09:00', closeTime: '00:00' },
-      saturday: { isOpen: false, openTime: '09:00', closeTime: '00:00' },
-      sunday: { isOpen: false, openTime: '09:00', closeTime: '00:00' }
-    };
-
-    // All Chicken Meals default hours: Mon-Fri: 9am-9pm, Sat-Sun: 8am-10pm
-    const allChickenHours: WeeklyHours = {
-      monday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
-      tuesday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
-      wednesday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
-      thursday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
-      friday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
-      saturday: { isOpen: true, openTime: '08:00', closeTime: '22:00' },
-      sunday: { isOpen: true, openTime: '08:00', closeTime: '22:00' }
-    };
-
-    // Pizza Only default hours: Mon-Thu: 12pm-12am, Fri: Closed, Sat-Sun: 10am-12am
-    const pizzaOnlyHours: WeeklyHours = {
-      monday: { isOpen: true, openTime: '12:00', closeTime: '00:00' },
-      tuesday: { isOpen: true, openTime: '12:00', closeTime: '00:00' },
-      wednesday: { isOpen: true, openTime: '12:00', closeTime: '00:00' },
-      thursday: { isOpen: true, openTime: '12:00', closeTime: '00:00' },
-      friday: { isOpen: false, openTime: '12:00', closeTime: '00:00' },
-      saturday: { isOpen: true, openTime: '10:00', closeTime: '00:00' },
-      sunday: { isOpen: true, openTime: '10:00', closeTime: '00:00' }
-    };
-
-    // Default hours for other restaurants
-    const defaultHours: WeeklyHours = {
-      monday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
-      tuesday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
-      wednesday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
-      thursday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
-      friday: { isOpen: true, openTime: '09:00', closeTime: '21:00' },
-      saturday: { isOpen: true, openTime: '08:00', closeTime: '22:00' },
-      sunday: { isOpen: true, openTime: '08:00', closeTime: '22:00' }
-    };
-
-    // Determine which default hours to use
-    let defaultHoursToUse = defaultHours;
-    if (restaurantId === '003' || restaurantName?.toLowerCase().includes('burger')) {
-      defaultHoursToUse = bestBurgersHours;
-    } else if (restaurantId === '001' || restaurantName?.toLowerCase().includes('chicken')) {
-      defaultHoursToUse = allChickenHours;
-    } else if (restaurantId === '002' || restaurantName?.toLowerCase().includes('pizza')) {
-      defaultHoursToUse = pizzaOnlyHours;
-    }
-
-    if (!operatingHoursText) {
-      console.log('No operating_hours text provided, using defaults');
-      return defaultHoursToUse;
-    }
-
-    console.log('Parsing operating_hours:', operatingHoursText);
-
-    // Map day abbreviations to full day names (handle various formats)
-    const dayMap: { [key: string]: keyof WeeklyHours } = {
-      'mon': 'monday',
-      'monday': 'monday',
-      'tue': 'tuesday',
-      'tuesday': 'tuesday',
-      'wed': 'wednesday',
-      'wednesday': 'wednesday',
-      'thu': 'thursday',
-      'thursday': 'thursday',
-      'fri': 'friday',
-      'friday': 'friday',
-      'sat': 'saturday',
-      'saturday': 'saturday',
-      'sun': 'sunday',
-      'sunday': 'sunday'
-    };
-
-    // Helper to convert 12-hour time to 24-hour format for input fields
-    const convertTo24Hour = (time12: string): string => {
-      // Clean up the time string - remove extra spaces
-      const cleaned = time12.trim().replace(/\s+/g, ' ');
-      
-      // Match formats like "9:00 AM", "09:00 AM", "9:00AM", etc.
-      const match = cleaned.match(/(\d{1,2}):(\d{2})\s*([AP]M)/i);
-      if (!match) {
-        console.warn('Could not parse time:', time12);
-        return '09:00';
-      }
-      
-      let hours = parseInt(match[1], 10);
-      const minutes = match[2];
-      const ampm = match[3].toUpperCase();
-      
-      if (ampm === 'PM' && hours !== 12) {
-        hours += 12;
-      } else if (ampm === 'AM' && hours === 12) {
-        hours = 0;
-      }
-      
-      const result = `${hours.toString().padStart(2, '0')}:${minutes}`;
-      console.log(`Converted ${time12} to ${result}`);
-      return result;
-    };
-
-    const parsedHours = { ...defaultHoursToUse };
-    
-    // Split by newlines, but also handle if it's all on one line with separators
-    let lines = operatingHoursText.split('\n').filter(line => line.trim());
-    
-    // If no newlines, try splitting by common separators
-    if (lines.length === 1 && operatingHoursText.includes(',')) {
-      lines = operatingHoursText.split(',').map(l => l.trim()).filter(l => l);
-    }
-
-    lines.forEach((line, index) => {
-      line = line.trim();
-      if (!line) return;
-
-      console.log(`Processing line ${index + 1}:`, line);
-
-      // Match format like "Mon: 9:00 AM - 9:00 PM" or "Monday: 9:00 AM - 9:00 PM" or "Mon: Closed"
-      // Also handle variations like "Mon 9:00 AM - 9:00 PM" (without colon)
-      const match = line.match(/(\w+)[:\s]+(.+)/i);
-      if (!match) {
-        console.warn('Could not parse line:', line);
-        return;
-      }
-
-      const dayName = match[1].toLowerCase();
-      const hoursText = match[2].trim();
-
-      const dayKey = dayMap[dayName];
-      if (!dayKey) {
-        console.warn('Unknown day:', dayName);
-        return;
-      }
-
-      // Check if closed (case insensitive)
-      if (hoursText.toLowerCase().includes('closed')) {
-        parsedHours[dayKey] = { isOpen: false, openTime: '09:00', closeTime: '21:00' };
-        console.log(`Set ${dayKey} to closed`);
-        return;
-      }
-
-      // Parse time range - handle various formats:
-      // "9:00 AM - 9:00 PM"
-      // "9:00AM - 9:00PM"
-      // "9:00 AM-9:00 PM"
-      // "9:00AM-9:00PM"
-      const timeMatch = hoursText.match(/(\d{1,2}:\d{2}\s*[AP]M)\s*[-–]\s*(\d{1,2}:\d{2}\s*[AP]M)/i);
-      if (timeMatch) {
-        const openTime = convertTo24Hour(timeMatch[1].trim());
-        const closeTime = convertTo24Hour(timeMatch[2].trim());
-        parsedHours[dayKey] = { isOpen: true, openTime, closeTime };
-        console.log(`Set ${dayKey} to ${openTime} - ${closeTime}`);
-      } else {
-        console.warn(`Could not parse time range for ${dayKey}:`, hoursText);
-      }
-    });
-
-    console.log('Final parsed hours:', parsedHours);
-    return parsedHours;
-  };
-
   // Fetch restaurant data from database
   useEffect(() => {
     async function fetchRestaurantData() {
@@ -400,7 +220,7 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
   const [ordersError, setOrdersError] = useState<string | null>(null);
 
   // Helper function to map database orders to component format
-  const mapOrderToComponent = (order: any): Order => {
+  const mapOrderToComponent = (order: any, driverNameMap: Record<string, string> = {}): Order => {
     const orderId = order.order_id || order.order_number || order.id?.substring(0, 8) || 'Unknown';
     let placedAtStr = 'N/A';
     // Use placed_at from orders table, fallback to created_at if placed_at is not available
@@ -421,7 +241,7 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
       displayStatus = 'Arrived';
     } else if (order.status === 'Pending') {
       displayStatus = 'Pending';
-    } else if (order.status === 'confirmed') {
+    } else if (order.status === 'confirmed' || order.status === 'Confirmed') {
       displayStatus = 'Confirmed'; // Confirmed orders show as "Confirmed"
     } else if (order.status === 'out_for_delivery') {
       displayStatus = 'In transit';
@@ -469,7 +289,7 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
       time: placedAtStr, // Store placed_at as time for compatibility
       placedAt: placedAtStr, // New field for combined date/time
       customer: customerName,
-      deliverer: order.driver_id || 'N/A',
+    deliverer: driverNameMap[order.driver_id] || order.driver_id || 'N/A',
       total: orderTotal ? `$${orderTotal.toFixed(2)}` : 'N/A',
       orderItems: orderItems,
       originalOrderId: order.order_id || orderId
@@ -487,9 +307,40 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
         
         // Fetch all orders (no status filter)
         const allOrders = await getOrdersByRestaurant(restaurantId);
+
+        // Fetch driver names for the driver_ids present in these orders
+        const driverIds = Array.from(
+          new Set(
+            (allOrders || [])
+              .map((o: any) => o.driver_id)
+              .filter(Boolean)
+          )
+        );
+
+        let driverNameMap: Record<string, string> = {};
+        if (driverIds.length > 0) {
+          try {
+            const { data: driverData, error: driverError } = await supabase
+              .from('drivers')
+              .select('driver_id, full_name, name')
+              .in('driver_id', driverIds);
+
+            if (!driverError && driverData) {
+              console.log('🔍 Drivers fetched for restaurant view:', driverData);
+              driverNameMap = driverData.reduce((acc: Record<string, string>, d: any) => {
+                acc[d.driver_id] = d.full_name || d.name || d['Full name'] || d.driver_id;
+                return acc;
+              }, {});
+            } else if (driverError) {
+              console.error('Error fetching driver names:', driverError);
+            }
+          } catch (err) {
+            console.error('Exception fetching driver names:', err);
+          }
+        }
         
         // Map Supabase orders to component format
-        const mappedOrders: Order[] = allOrders.map(mapOrderToComponent);
+        const mappedOrders: Order[] = allOrders.map((o: any) => mapOrderToComponent(o, driverNameMap));
         
         setOrders(mappedOrders);
       } catch (error) {
@@ -629,9 +480,10 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
     }));
   };
 
-  const handleUpdateWeeklyHours = () => {
+  const handleUpdateWeeklyHours = async () => {
     // Validate that open times are before close times
     const daysWithErrors: string[] = [];
+    setHoursStatus({ type: null });
     
     Object.entries(weeklyHours).forEach(([day, hours]) => {
       if (hours.isOpen) {
@@ -648,11 +500,25 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
     });
 
     if (daysWithErrors.length > 0) {
-      alert(`Invalid hours for: ${daysWithErrors.join(', ')}. Opening time must be before closing time.`);
+      setHoursStatus({ type: 'error', message: `Invalid hours for: ${daysWithErrors.join(', ')}. Opening time must be before closing time.` });
+      return;
+    }
+    if (!restaurantId) {
+      setHoursStatus({ type: 'error', message: 'Missing restaurant id. Please log in again.' });
       return;
     }
 
-    alert('Operating hours updated successfully!');
+    try {
+      setHoursSaving(true);
+      await updateRestaurantOperatingHours(restaurantId, weeklyHours);
+      setHoursStatus({ type: 'success', message: 'Operating hours updated successfully.' });
+    } catch (err) {
+      console.error('Failed to update operating hours', err);
+      const message = err instanceof Error ? err.message : 'Failed to update hours.';
+      setHoursStatus({ type: 'error', message });
+    } finally {
+      setHoursSaving(false);
+    }
   };
 
   const copyHoursToAll = (day: keyof WeeklyHours) => {
@@ -673,8 +539,8 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
     );
 
     return activeOrderTab === 'active' 
-      ? filtered.filter(order => order.status !== 'Arrived') // Show all orders except Completed (Arrived) in Active tab
-      : filtered.filter(order => order.status === 'Arrived'); // Only show Completed orders in History tab
+      ? filtered.filter(order => order.status === 'Pending') // Only pending orders in Active tab
+      : filtered.filter(order => order.status !== 'Pending'); // Everything else in History
   };
 
   const handleConfirmOrder = async (orderId: string) => {
@@ -1111,13 +977,29 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
                     </div>
                   ))}
                   
-                  <div className="pt-4">
+                  <div className="pt-4 flex items-center gap-3">
                     <Button 
                       onClick={handleUpdateWeeklyHours}
                       className="bg-orange-600 hover:bg-orange-700"
+                      disabled={hoursSaving}
                     >
-                      Update Hours
+                      {hoursSaving ? (
+                        <span className="flex items-center gap-2">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Updating...
+                        </span>
+                      ) : (
+                        'Update Hours'
+                      )}
                     </Button>
+                    {hoursStatus.type === 'success' && (
+                      <span className="text-green-600 text-sm flex items-center gap-1">
+                        <CheckCircle2 className="h-4 w-4" /> {hoursStatus.message}
+                      </span>
+                    )}
+                    {hoursStatus.type === 'error' && (
+                      <span className="text-red-600 text-sm">{hoursStatus.message}</span>
+                    )}
                   </div>
                 </CardContent>
               </Card>

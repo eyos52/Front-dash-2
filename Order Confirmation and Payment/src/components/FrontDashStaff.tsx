@@ -83,6 +83,13 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
   const [searchOrderId, setSearchOrderId] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   
+  const getDriverName = (driverId?: string, driverNameFromOrder?: string) => {
+    if (driverNameFromOrder) return driverNameFromOrder;
+    if (!driverId) return '—';
+    const driver = drivers.find(d => d.driver_id === driverId);
+    return driver?.['Full name'] || (driver as any)?.full_name || (driver as any)?.name || driverId;
+  };
+
   // Settings state
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -97,17 +104,22 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
 
   // Load data on mount and set up polling for new orders
   useEffect(() => {
-    if (staffId) {
+    // Load orders even if staffId is missing (use empty string as fallback)
+    // This ensures orders can load even if staff lookup fails
+    const effectiveStaffId = staffId || '';
+    
+    // Always load orders - don't wait for staff member lookup
+    loadData();
+    
+    // Try to load staff member (but don't block on it)
+    loadStaffMember();
+    
+    // Poll for new orders every 5 seconds to catch confirmed orders from restaurant portal
+    const interval = setInterval(() => {
       loadData();
-      loadStaffMember();
-      
-      // Poll for new orders every 5 seconds to catch confirmed orders from restaurant portal
-      const interval = setInterval(() => {
-        loadData();
-      }, 5000);
-      
-      return () => clearInterval(interval);
-    }
+    }, 5000);
+    
+    return () => clearInterval(interval);
   }, [staffId]);
 
   const loadData = async () => {
@@ -126,10 +138,18 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
         pending = [];
       }
       
+      // Always load all orders (functions no longer filter by staff_id)
+      // Always load pending orders, active orders, delivered orders, and drivers
       const [active, delivered, driversList] = await Promise.all([
-        getStaffActiveOrders(staffId),
-        getStaffDeliveredOrders(staffId),
-        getDrivers()
+        getStaffActiveOrders(staffId || '').catch((err) => {
+          console.error('Error loading active orders:', err);
+          return [];
+        }),
+        getStaffDeliveredOrders(staffId || '').catch((err) => {
+          console.error('Error loading delivered orders:', err);
+          return [];
+        }),
+        getDrivers().catch(() => [])
       ]);
       
       console.log('=== PENDING ORDERS RESULT ===');
@@ -167,7 +187,8 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
       }, 100);
       setActiveOrders(active as OrderWithDetails[]);
       setDeliveredOrders(delivered as OrderWithDetails[]);
-      setDrivers(driversList.filter(d => d.status === 'active'));
+      // getDrivers() already filters to only active and available drivers
+      setDrivers(driversList);
     } catch (error: any) {
       console.error('Error loading data:', error);
       console.error('Error stack:', error.stack);
@@ -181,29 +202,22 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
     if (!staffUser?.username) return;
     try {
       const member = await getStaffByUsername(staffUser.username);
-      setStaffMember(member);
-      if (member.first_time_login) {
-        setShowChangePassword(true);
-        toast.info('Please change your password on first login');
+      if (member) {
+        setStaffMember(member);
+        if (member.first_time_login) {
+          setShowChangePassword(true);
+          toast.info('Please change your password on first login');
+        }
+      } else {
+        console.warn('⚠️ Staff member not found in database, using demo account data');
+        // Continue without setting staffMember - orders can still load
       }
     } catch (error) {
       console.error('Error loading staff member:', error);
+      // Don't throw - allow orders to load even if staff lookup fails
     }
   };
 
-  // Calculate estimated delivery time (simple distance-based calculation)
-  const calculateEstimatedDelivery = (restaurantAddress: string, customerAddress: string): string => {
-    // Simple calculation: assume 1 minute per mile, average 30 mph
-    // This is a placeholder - in production, use a mapping service API
-    const baseMinutes = 25; // Base delivery time
-    const randomVariation = Math.floor(Math.random() * 20) + 1; // 1-20 minutes variation
-    const totalMinutes = baseMinutes + randomVariation;
-    
-    const deliveryTime = new Date();
-    deliveryTime.setMinutes(deliveryTime.getMinutes() + totalMinutes);
-    
-    return deliveryTime.toISOString();
-  };
 
   const formatTimeAgo = (dateString: string): string => {
     const date = new Date(dateString);
@@ -242,12 +256,13 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
         toast.error('Order ID not found');
         return;
       }
+      // Assign order to staff - this will set staff_id but keep status as Confirmed (Queued)
       await assignOrderToStaff(orderIdToUse, staffId);
-      toast.success(`Order ${firstOrder.order_number || firstOrder.order_id} retrieved successfully`);
+      toast.success(`Order ${firstOrder.order_id || firstOrder.order_number} retrieved. You can now assign a driver.`);
       await loadData();
     } catch (error: any) {
       console.error('Error retrieving order:', error);
-      toast.error('Failed to retrieve order');
+      toast.error(error.message || 'Failed to retrieve order');
     } finally {
       setIsLoading(false);
     }
@@ -266,40 +281,48 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
 
     try {
       setIsLoading(true);
-      const restaurant = selectedOrder.restaurants;
-      const restaurantAddress = restaurant ? `${restaurant.address}, ${restaurant.city}, ${restaurant.state}` : '';
-      const customerAddress = `${selectedOrder.delivery_address}, ${selectedOrder.city}, ${selectedOrder.state}`;
       
-      const estimatedDelivery = calculateEstimatedDelivery(restaurantAddress, customerAddress);
+      // Use order_id if available, otherwise use id
+      const orderIdToUse = selectedOrder.order_id || selectedOrder.id;
+      if (!orderIdToUse) {
+        toast.error('Order ID not found');
+        return;
+      }
       
-      await assignDriverToOrder(selectedOrder.id, selectedDriverId, estimatedDelivery);
-      toast.success('Driver assigned successfully');
+      await assignDriverToOrder(orderIdToUse, selectedDriverId, staffId);
+      toast.success('Driver assigned successfully. Order moved to Active Orders.');
       setShowAssignDriver(false);
       setSelectedOrder(null);
       setSelectedDriverId('');
       await loadData();
     } catch (error: any) {
       console.error('Error assigning driver:', error);
-      toast.error('Failed to assign driver');
+      toast.error(error.message || 'Failed to assign driver');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleConfirmDelivery = async (orderId: string) => {
-    if (!confirm(`Are you sure you want to confirm delivery for order ${orderId}?`)) {
+  const handleConfirmDelivery = async (order: OrderWithDetails) => {
+    const orderIdToUse = order.order_id || order.id;
+    if (!orderIdToUse) {
+      toast.error('Order ID not found');
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to confirm delivery for order ${orderIdToUse}?`)) {
       return;
     }
 
     try {
       setIsLoading(true);
       const deliveredAt = new Date().toISOString();
-      await confirmDelivery(orderId, deliveredAt);
-      toast.success('Delivery confirmed successfully');
+      await confirmDelivery(orderIdToUse, deliveredAt);
+      toast.success('Delivery confirmed successfully. Driver is now available again.');
       await loadData();
     } catch (error: any) {
       console.error('Error confirming delivery:', error);
-      toast.error('Failed to confirm delivery');
+      toast.error(error.message || 'Failed to confirm delivery');
     } finally {
       setIsLoading(false);
     }
@@ -373,15 +396,12 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
     }
   };
 
+  // Calculate stats based on current data from database
   const stats = {
-    ordersInQueue: pendingOrders.length,
-    myActiveOrders: activeOrders.length,
-    deliveredToday: deliveredOrders.filter(o => {
-      const delivered = new Date(o.delivered_at || o.updated_at);
-      const today = new Date();
-      return delivered.toDateString() === today.toDateString();
-    }).length,
-    driversAvailable: drivers.length
+    ordersInQueue: pendingOrders.length, // Orders with status Pending/Confirmed and no driver
+    myActiveOrders: activeOrders.length, // Orders with status Active assigned to this staff
+    deliveredToday: deliveredOrders.length, // Already filtered to today's deliveries by getStaffDeliveredOrders
+    driversAvailable: drivers.filter(d => d.employment_status === 'active' && d.is_available === true).length
   };
 
   const renderDashboard = () => (
@@ -482,10 +502,10 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Order</TableHead>
+                <TableHead>Order ID</TableHead>
                 <TableHead>Restaurant</TableHead>
-                <TableHead>Placed</TableHead>
-                <TableHead>ETA</TableHead>
+                <TableHead>Placed At</TableHead>
+                <TableHead>Total</TableHead>
                 <TableHead>Details</TableHead>
               </TableRow>
             </TableHeader>
@@ -496,14 +516,30 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
                 if (pendingOrders.length > 0) {
                   return pendingOrders.slice(0, 5).map((order, index) => {
                     console.log(`Rendering order ${index}:`, order);
+                    const orderTotal = order.total || order.subtotal || 0;
                     return (
                       <TableRow key={order.id || order.order_id || `order-${index}`}>
-                        <TableCell className="font-medium">{order.order_number || order.order_id || 'N/A'}</TableCell>
+                        <TableCell className="font-medium">{order.order_id || order.order_number || 'N/A'}</TableCell>
                         <TableCell>{order.restaurants?.name || 'Unknown'}</TableCell>
-                        <TableCell>{order.placed_at ? formatTimeAgo(order.placed_at) : (order.created_at ? formatTimeAgo(order.created_at) : '—')}</TableCell>
-                        <TableCell>—</TableCell>
+                        <TableCell>{order.placed_at ? new Date(order.placed_at).toLocaleString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                          hour12: true
+                        }) : (order.created_at ? new Date(order.created_at).toLocaleString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                          hour12: true
+                        }) : '—')}</TableCell>
+                        <TableCell>${orderTotal.toFixed(2)}</TableCell>
                         <TableCell>
-                          <Button variant="ghost" size="sm" onClick={() => handleViewOrderDetails(order)}>
+                          <Button variant="ghost" size="sm" onClick={() => {
+                            setSelectedOrder(order);
+                            setShowOrderDetails(true);
+                          }}>
                             Details
                           </Button>
                         </TableCell>
@@ -513,8 +549,8 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
                 } else {
                   return (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center text-gray-500">
-                        No orders in queue (pendingOrders.length = {pendingOrders.length})
+                      <TableCell colSpan={5} className="text-center text-gray-500 py-8">
+                        No orders in queue
                       </TableCell>
                     </TableRow>
                   );
@@ -537,7 +573,6 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
                 <TableRow>
                   <TableHead>Order</TableHead>
                   <TableHead>Restaurant</TableHead>
-                  <TableHead>Estimated</TableHead>
                   <TableHead>Driver</TableHead>
                   <TableHead>Delivered (HH:MM)</TableHead>
                 </TableRow>
@@ -548,24 +583,22 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
                     <TableCell className="font-medium">{order.order_number}</TableCell>
                     <TableCell>{order.restaurants?.name || 'Unknown'}</TableCell>
                     <TableCell>
-                      {order.estimated_delivery 
-                        ? new Date(order.estimated_delivery).toLocaleString()
-                        : '—'}
-                    </TableCell>
-                    <TableCell>
                       {order.driver_id 
-                        ? drivers.find(d => d.id === order.driver_id)?.first_name + ' ' + 
-                          drivers.find(d => d.id === order.driver_id)?.last_name
+                        ? (() => {
+                            const driver = drivers.find(d => d.driver_id === order.driver_id);
+                            return driver ? driver['Full name'] : order.driver_id;
+                          })()
                         : 'Not assigned'}
                     </TableCell>
                     <TableCell>
-                      {order.status === 'out_for_delivery' ? (
+                      {order.status === 'Active' ? (
                         <Button 
                           size="sm" 
-                          onClick={() => handleConfirmDelivery(order.id)}
+                          onClick={() => handleConfirmDelivery(order)}
                           disabled={isLoading}
+                          className="!bg-green-600 hover:!bg-green-700 !text-white border-0"
                         >
-                          Confirm delivery
+                          Mark as Delivered
                         </Button>
                       ) : (
                         '—'
@@ -595,7 +628,6 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
                   <TableHead>Order</TableHead>
                   <TableHead>Restaurant</TableHead>
                   <TableHead>Delivered At</TableHead>
-                  <TableHead>Estimated</TableHead>
                   <TableHead>Driver</TableHead>
                   <TableHead>Details</TableHead>
                 </TableRow>
@@ -609,11 +641,6 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
                       {order.delivered_at 
                         ? new Date(order.delivered_at).toLocaleString()
                         : new Date(order.updated_at).toLocaleString()}
-                    </TableCell>
-                    <TableCell>
-                      {order.estimated_delivery 
-                        ? new Date(order.estimated_delivery).toLocaleString()
-                        : '—'}
                     </TableCell>
                     <TableCell>
                       {order.driver_id 
@@ -677,18 +704,32 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
       {/* Order Queue */}
       <Card>
         <CardHeader className="flex items-center justify-between">
-          <CardTitle>Order Queue</CardTitle>
-          <span className="text-sm text-gray-500">({pendingOrders.length} orders)</span>
+          <div className="flex items-center gap-3">
+            <CardTitle>Order Queue</CardTitle>
+            <span className="text-sm text-gray-500">({pendingOrders.length} orders)</span>
+          </div>
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={() => {
+              console.log('🔄 Manual refresh triggered');
+              loadData();
+            }}
+            disabled={isLoading}
+          >
+            {isLoading ? 'Refreshing...' : 'Refresh'}
+          </Button>
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Order</TableHead>
+                <TableHead>Order ID</TableHead>
                 <TableHead>Restaurant</TableHead>
-                <TableHead>Placed</TableHead>
-                <TableHead>ETA</TableHead>
-                <TableHead>Details</TableHead>
+                <TableHead>Placed At</TableHead>
+                <TableHead>Total</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -697,16 +738,52 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
                 if (pendingOrders.length > 0) {
                   return pendingOrders.map((order, index) => {
                     console.log(`Rendering order ${index}:`, order);
+                    const orderTotal = order.total || order.subtotal || 0;
+                    const displayStatus = order.status === 'Confirmed' || order.status === 'confirmed' ? 'Queued' : order.status;
                     return (
                       <TableRow key={order.id || order.order_id || `order-${index}`}>
-                        <TableCell className="font-medium">{order.order_number || order.order_id || 'N/A'}</TableCell>
+                        <TableCell className="font-medium">{order.order_id || order.order_number || 'N/A'}</TableCell>
                         <TableCell>{order.restaurants?.name || 'Unknown'}</TableCell>
-                        <TableCell>{order.placed_at ? formatTimeAgo(order.placed_at) : (order.created_at ? formatTimeAgo(order.created_at) : '—')}</TableCell>
-                        <TableCell>—</TableCell>
+                        <TableCell>{order.placed_at ? new Date(order.placed_at).toLocaleString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                          hour12: true
+                        }) : (order.created_at ? new Date(order.created_at).toLocaleString('en-US', {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: 'numeric',
+                          minute: '2-digit',
+                          hour12: true
+                        }) : '—')}</TableCell>
+                        <TableCell>${orderTotal.toFixed(2)}</TableCell>
                         <TableCell>
-                          <Button variant="ghost" size="sm" onClick={() => handleViewOrderDetails(order)}>
-                            Details
-                          </Button>
+                          <Badge variant="outline">{displayStatus}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex gap-2">
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              onClick={() => {
+                                setSelectedOrder(order);
+                                setShowAssignDriver(true);
+                              }}
+                            >
+                              Assign Driver
+                            </Button>
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              onClick={() => {
+                                setSelectedOrder(order);
+                                setShowOrderDetails(true);
+                              }}
+                            >
+                              Details
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     );
@@ -714,8 +791,8 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
                 } else {
                   return (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center text-gray-500">
-                        No orders in queue (pendingOrders.length = {pendingOrders.length})
+                      <TableCell colSpan={6} className="text-center text-gray-500 py-8">
+                        No orders in queue
                       </TableCell>
                     </TableRow>
                   );
@@ -737,26 +814,20 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
               <TableRow>
                 <TableHead>Order</TableHead>
                 <TableHead>Restaurant</TableHead>
-                <TableHead>Estimated</TableHead>
                 <TableHead>Driver</TableHead>
                 <TableHead>Delivered (HH:MM)</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {activeOrders.map((order) => (
-                <TableRow key={order.id}>
-                  <TableCell className="font-medium">{order.order_number}</TableCell>
+                <TableRow key={order.id || order.order_id}>
+                  <TableCell className="font-medium">{order.order_id || order.order_number || 'N/A'}</TableCell>
                   <TableCell>{order.restaurants?.name || 'Unknown'}</TableCell>
-                  <TableCell>
-                    {order.estimated_delivery 
-                      ? new Date(order.estimated_delivery).toLocaleString()
-                      : '—'}
-                  </TableCell>
                   <TableCell>
                     {order.driver_id 
                       ? (() => {
-                          const driver = drivers.find(d => d.id === order.driver_id);
-                          return driver ? `${driver.first_name} ${driver.last_name} (On trip)` : 'Not assigned';
+                            const name = getDriverName(order.driver_id, (order as any)?.driver_name);
+                          return name ? `${name} (On trip)` : order.driver_id;
                         })()
                       : (
                         <Button 
@@ -772,13 +843,14 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
                       )}
                   </TableCell>
                   <TableCell>
-                    {order.status === 'out_for_delivery' ? (
+                    {order.status === 'Active' ? (
                       <Button 
                         size="sm" 
-                        onClick={() => handleConfirmDelivery(order.id)}
+                        onClick={() => handleConfirmDelivery(order)}
                         disabled={isLoading}
+                        className="!bg-green-600 hover:!bg-green-700 !text-white border-0"
                       >
-                        Confirm delivery
+                        Mark as Delivered
                       </Button>
                     ) : (
                       '—'
@@ -798,12 +870,12 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
         </CardContent>
       </Card>
 
-      {/* Delivered Orders */}
-      {deliveredOrders.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Delivered Orders</CardTitle>
-          </CardHeader>
+      {/* Order History */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Order History</CardTitle>
+          <span className="text-sm text-gray-500">({deliveredOrders.length} delivered today)</span>
+        </CardHeader>
           <CardContent>
             <Table>
               <TableHeader>
@@ -815,27 +887,48 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {deliveredOrders.map((order) => (
-                  <TableRow key={order.id}>
-                    <TableCell className="font-medium">{order.order_number}</TableCell>
-                    <TableCell>{order.restaurants?.name || 'Unknown'}</TableCell>
-                    <TableCell>
-                      {order.delivered_at 
-                        ? new Date(order.delivered_at).toLocaleString()
-                        : new Date(order.updated_at).toLocaleString()}
-                    </TableCell>
-                    <TableCell>
-                      <Button variant="ghost" size="sm" onClick={() => handleViewOrderDetails(order)}>
-                        View details
-                      </Button>
+                {deliveredOrders.length > 0 ? (
+                  deliveredOrders.map((order) => (
+                    <TableRow key={order.id || order.order_id}>
+                      <TableCell className="font-medium">{order.order_id || order.order_number || 'N/A'}</TableCell>
+                      <TableCell>{order.restaurants?.name || 'Unknown'}</TableCell>
+                      <TableCell>
+                        {order.delivered_at 
+                          ? new Date(order.delivered_at).toLocaleString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              year: 'numeric',
+                              hour: 'numeric',
+                              minute: '2-digit',
+                              hour12: true
+                            })
+                          : (order.updated_at ? new Date(order.updated_at).toLocaleString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              year: 'numeric',
+                              hour: 'numeric',
+                              minute: '2-digit',
+                              hour12: true
+                            }) : '—')}
+                      </TableCell>
+                      <TableCell>
+                        <Button variant="ghost" size="sm" onClick={() => handleViewOrderDetails(order)}>
+                          View details
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-center text-gray-500 py-8">
+                      No delivered orders today
                     </TableCell>
                   </TableRow>
-                ))}
+                )}
               </TableBody>
             </Table>
           </CardContent>
         </Card>
-      )}
     </div>
   );
 
@@ -1004,22 +1097,24 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label className="text-sm font-medium text-gray-500">Order ID</Label>
-                  <p className="font-semibold">{selectedOrder.order_number || selectedOrder.order_id || 'N/A'}</p>
+                  <p className="font-semibold">{selectedOrder.order_id || selectedOrder.order_number || 'N/A'}</p>
                 </div>
                 <div>
                   <Label className="text-sm font-medium text-gray-500">Restaurant</Label>
                   <p className="font-semibold">{selectedOrder.restaurants?.name || 'Unknown'}</p>
                 </div>
+                {(selectedOrder.customer_first_name || selectedOrder.customer_last_name) && (
+                  <div>
+                    <Label className="text-sm font-medium text-gray-500">Customer</Label>
+                    <p className="font-semibold">
+                      {selectedOrder.customer_first_name || ''} {selectedOrder.customer_last_name || ''}
+                    </p>
+                  </div>
+                )}
                 <div>
                   <Label className="text-sm font-medium text-gray-500">Placed At</Label>
                   <p>{selectedOrder.placed_at ? new Date(selectedOrder.placed_at).toLocaleString() : (selectedOrder.created_at ? new Date(selectedOrder.created_at).toLocaleString() : 'N/A')}</p>
                 </div>
-                {selectedOrder.estimated_delivery && (
-                  <div>
-                    <Label className="text-sm font-medium text-gray-500">Estimated Delivery</Label>
-                    <p>{new Date(selectedOrder.estimated_delivery).toLocaleString()}</p>
-                  </div>
-                )}
                 {selectedOrder.delivered_at && (
                   <div>
                     <Label className="text-sm font-medium text-gray-500">Delivered At</Label>
@@ -1031,8 +1126,8 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
                     <Label className="text-sm font-medium text-gray-500">Driver</Label>
                     <p>
                       {(() => {
-                        const driver = drivers.find(d => d.id === selectedOrder.driver_id);
-                        return driver ? `${driver.first_name} ${driver.last_name}` : 'Unknown';
+                        const driver = drivers.find(d => d.driver_id === selectedOrder.driver_id);
+                        return driver ? driver['Full name'] : selectedOrder.driver_id;
                       })()}
                     </p>
                   </div>
@@ -1089,7 +1184,7 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
             <Button variant="outline" onClick={() => setShowOrderDetails(false)}>
               Close
             </Button>
-            {selectedOrder && !selectedOrder.driver_id && selectedOrder.status !== 'pending' && (
+            {selectedOrder && !selectedOrder.driver_id && (selectedOrder.status === 'Confirmed' || selectedOrder.status === 'confirmed' || selectedOrder.status === 'Pending' || selectedOrder.status === 'pending') && (
               <Button onClick={() => {
                 setShowOrderDetails(false);
                 setShowAssignDriver(true);
@@ -1113,20 +1208,20 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
           <div className="space-y-2 max-h-96 overflow-y-auto">
             {drivers.map((driver) => (
               <button
-                key={driver.id}
-                onClick={() => setSelectedDriverId(driver.id)}
+                key={driver.driver_id}
+                onClick={() => setSelectedDriverId(driver.driver_id)}
                 className={`w-full p-3 rounded-lg border-2 text-left transition-colors ${
-                  selectedDriverId === driver.id
+                  selectedDriverId === driver.driver_id
                     ? 'border-orange-500 bg-orange-50'
                     : 'border-gray-200 hover:bg-gray-50'
                 }`}
               >
                 <div className="flex items-center justify-between">
                   <span className="font-medium">
-                    {driver.first_name} {driver.last_name}
+                    {driver['Full name']}
                   </span>
-                  <Badge variant={driver.status === 'active' ? 'default' : 'secondary'}>
-                    {driver.status}
+                  <Badge variant={driver.employment_status === 'active' && driver.is_available ? 'default' : 'secondary'}>
+                    {driver.is_available ? 'Available' : 'Unavailable'}
                   </Badge>
                 </div>
               </button>
