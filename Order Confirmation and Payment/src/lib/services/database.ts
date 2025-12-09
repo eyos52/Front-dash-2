@@ -1,4 +1,27 @@
 import { supabase, Restaurant, Order, OrderItem, RestaurantRegistration, StaffMember, Driver, WithdrawalRequest, MenuItem } from '../supabase';
+import { WeeklyHours, serializeOperatingHours } from '../utils/operatingHours';
+
+// Generate a unique, human-friendly order_id (e.g., FD-20250101-ABC123)
+async function generateUniqueOrderId(): Promise<string> {
+  const ts = new Date();
+  const datePart = ts.toISOString().slice(0, 10).replace(/-/g, '');
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const randomPart = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const candidate = `FD-${datePart}-${randomPart}`;
+
+    const { data, error } = await supabase
+      .from('orders')
+      .select('order_id')
+      .eq('order_id', candidate)
+      .maybeSingle();
+
+    if (!error && !data) return candidate;
+  }
+
+  // Fallback: append timestamp to reduce collision risk
+  return `FD-${datePart}-${Date.now()}`;
+}
 
 // ========== RESTAURANT OPERATIONS ==========
 
@@ -27,6 +50,38 @@ export async function getRestaurants() {
   });
   
   return restaurants as Restaurant[];
+}
+
+// Update operating hours for a restaurant
+export async function updateRestaurantOperatingHours(restaurantId: string, hours: WeeklyHours) {
+  const operatingHours = serializeOperatingHours(hours);
+
+  // Only update the operating_hours JSON/text column; avoid non-existent columns
+  const updatePayload: any = { operating_hours: operatingHours };
+
+  // Try restaurant_id first (text key), then fallback to id (uuid)
+  const updateByRestaurantId = await supabase
+    .from('restaurants')
+    .update(updatePayload)
+    .eq('restaurant_id', restaurantId)
+    .select('operating_hours')
+    .maybeSingle();
+
+  if (!updateByRestaurantId.error && updateByRestaurantId.data) {
+    return;
+  }
+
+  const updateById = await supabase
+    .from('restaurants')
+    .update(updatePayload)
+    .eq('id', restaurantId)
+    .select('operating_hours')
+    .maybeSingle();
+
+  if (updateById.error) {
+    console.error('Supabase error updating operating hours:', updateById.error);
+    throw new Error(`Failed to update operating hours: ${updateById.error.message}`);
+  }
 }
 
 export async function getRestaurantById(id: string) {
@@ -341,9 +396,14 @@ export async function processApprovedRegistrationRequests() {
 // ========== ORDER OPERATIONS ==========
 
 export async function createOrder(orderData: Omit<Order, 'id' | 'created_at'>) {
+  const payload = { ...orderData };
+  if (!payload.order_id) {
+    payload.order_id = await generateUniqueOrderId();
+  }
+
   const { data, error } = await supabase
     .from('orders')
-    .insert([orderData])
+    .insert([payload])
     .select()
     .single();
 
@@ -377,9 +437,13 @@ export async function getOrderById(id: string) {
 }
 
 export async function updateOrderStatus(id: string, status: Order['status']) {
+  // Only update status and updated_at - never touch placed_at
   const { data, error } = await supabase
     .from('orders')
-    .update({ status })
+    .update({ 
+      status,
+      updated_at: new Date().toISOString()
+    })
     .eq('id', id)
     .select()
     .single();
@@ -498,10 +562,12 @@ export async function getOrdersByRestaurant(restaurantId: string, status?: strin
 export async function confirmOrder(orderId: string) {
   console.log('Confirming order:', orderId);
   
+  // Only update status and updated_at - never touch placed_at
   const { data, error } = await supabase
     .from('orders')
     .update({ 
-      status: 'confirmed'
+      status: 'Confirmed',
+      updated_at: new Date().toISOString()
     })
     .eq('order_id', orderId)
     .select()
@@ -518,33 +584,64 @@ export async function confirmOrder(orderId: string) {
 
 // Get pending orders (order queue) - for staff interface
 // Includes both "pending" and "confirmed" orders (confirmed orders from restaurant portal)
+// Get pending orders for staff queue
+// Returns orders that are confirmed/queued but not yet assigned to a driver
 export async function getPendingOrders() {
-  console.log('🔵 getPendingOrders() called');
-  console.log('🔵 Fetching pending orders for queue...');
+  console.log('🔵 getPendingOrders() - Fetching orders for staff queue...');
   
-  try {
-    // First, try a simple query to see if we can get any orders at all
-    console.log('🔵 Running simple test query...');
-    const { data: simpleTest, error: simpleError } = await supabase
-      .from('orders')
-      .select('order_id, status')
-      .in('status', ['pending', 'confirmed'])
-      .limit(5);
-    
-    console.log('🔵 Simple test query result:', simpleTest?.length || 0);
-    console.log('🔵 Simple test data:', simpleTest);
-    if (simpleError) {
-      console.error('🔴 Simple test query error:', simpleError);
-      console.error('🔴 Error code:', simpleError.code);
-      console.error('🔴 Error message:', simpleError.message);
-    }
-  } catch (testErr) {
-    console.error('🔴 Exception in simple test query:', testErr);
+  // First, let's check what orders exist in the database (for debugging)
+  const { data: allOrdersDebug, error: debugError } = await supabase
+    .from('orders')
+    .select('order_id, status, driver_id, placed_at, restaurant_id')
+    .order('placed_at', { ascending: false })
+    .limit(20);
+  
+  if (!debugError && allOrdersDebug) {
+    console.log('🔍 Recent orders in database:', allOrdersDebug.length);
+    allOrdersDebug.forEach((order: any) => {
+      const statusLower = String(order.status || '').toLowerCase().trim();
+      const isConfirmed = statusLower === 'confirmed';
+      const isPending = statusLower === 'pending';
+      const hasNoDriver = !order.driver_id;
+      const shouldBeInQueue = isConfirmed && hasNoDriver;
+      console.log('  -', order.order_id, '| Status:', order.status, '| Driver:', order.driver_id || 'NULL', '| Should be in queue:', shouldBeInQueue);
+    });
+  } else if (debugError) {
+    console.error('❌ Error fetching debug orders:', debugError);
   }
   
-  // Query for orders with status 'pending' or 'confirmed' (both lowercase)
-  // Show all confirmed orders regardless of staff_id assignment
-  const { data, error } = await supabase
+  // Specifically check for Confirmed orders (any case variation)
+  const { data: confirmedOrdersCheck, error: confirmedError } = await supabase
+    .from('orders')
+    .select('order_id, status, driver_id')
+    .or('status.eq.Confirmed,status.eq.confirmed,status.ilike.confirmed');
+  
+  if (!confirmedError && confirmedOrdersCheck) {
+    const confirmedWithoutDriver = confirmedOrdersCheck.filter((o: any) => !o.driver_id);
+    console.log('🔍 Total Confirmed orders in database:', confirmedOrdersCheck.length);
+    console.log('🔍 Confirmed orders WITHOUT driver (should be in queue):', confirmedWithoutDriver.length);
+    if (confirmedWithoutDriver.length > 0) {
+      console.log('🔍 Confirmed order IDs (no driver):', confirmedWithoutDriver.map((o: any) => o.order_id));
+    }
+  }
+  
+  // Fetch all orders without driver_id - this is the key filter
+  // First, let's try a simple query to see what columns exist
+  const { data: testQuery, error: testError } = await supabase
+    .from('orders')
+    .select('order_id, status, driver_id, restaurant_id, placed_at, total')
+    .limit(5);
+  
+  if (!testError && testQuery) {
+    console.log('🔍 Test query successful. Sample order columns:', testQuery[0] ? Object.keys(testQuery[0]) : 'No orders');
+    console.log('🔍 Sample order data:', testQuery[0]);
+  } else if (testError) {
+    console.error('❌ Test query failed:', testError);
+    console.error('❌ This might indicate a column name mismatch');
+  }
+  
+  // Now fetch all orders without driver_id
+  const { data: allOrders, error: fetchError } = await supabase
     .from('orders')
     .select(`
       *,
@@ -563,55 +660,125 @@ export async function getPendingOrders() {
         )
       )
     `)
-    .in('status', ['pending', 'confirmed'])
-    .order('created_at', { ascending: true });
-
-  if (error) {
-    console.error('Supabase error fetching pending orders:', error);
-    throw error;
+    .is('driver_id', null) // Only orders without driver assigned
+    .order('placed_at', { ascending: true, nullsFirst: false });
+  
+  if (fetchError) {
+    console.error('❌ Error fetching orders:', fetchError);
+    console.error('❌ Error details:', {
+      message: fetchError.message,
+      code: fetchError.code,
+      details: fetchError.details,
+      hint: fetchError.hint
+    });
+    throw fetchError;
   }
   
-  console.log('Orders fetched with status filter (pending/confirmed):', data?.length || 0);
-  if (data && data.length > 0) {
-    console.log('First order sample:', {
-      order_id: data[0].order_id,
-      status: data[0].status,
-      staff_id: data[0].staff_id,
-      restaurant_id: data[0].restaurant_id
+  console.log('📊 Total orders without driver:', allOrders?.length || 0);
+  
+  // Log what columns we actually got back
+  if (allOrders && allOrders.length > 0) {
+    console.log('📋 Columns in first order:', Object.keys(allOrders[0]));
+    console.log('📋 First order sample:', {
+      order_id: allOrders[0].order_id,
+      status: allOrders[0].status,
+      driver_id: allOrders[0].driver_id,
+      restaurant_id: allOrders[0].restaurant_id,
+      placed_at: allOrders[0].placed_at
     });
-  } else {
-    // Debug: Check what orders exist with these statuses
-    console.log('No orders found. Checking what orders exist in database...');
-    const { data: allOrders, error: allError } = await supabase
-      .from('orders')
-      .select('order_id, status, staff_id, restaurant_id')
-      .in('status', ['pending', 'confirmed'])
-      .limit(20);
+  }
+  
+  // Log each order's status for debugging BEFORE filtering
+  if (allOrders && allOrders.length > 0) {
+    console.log('📋 Orders without driver and their statuses:');
+    allOrders.forEach((order: any) => {
+      const statusStr = String(order.status || 'NULL');
+      const statusLower = statusStr.toLowerCase().trim();
+      const isPending = statusLower === 'pending';
+      const isConfirmed = statusLower === 'confirmed';
+      console.log('  -', order.order_id, '| Status:', statusStr, '| Lowercase:', statusLower, '| IsPending:', isPending, '| IsConfirmed:', isConfirmed);
+    });
+  }
+  
+  // Filter by status in JavaScript (case-insensitive)
+  // ONLY include orders with status 'Confirmed' - exclude 'Pending' and all other statuses
+  const pendingOrders = (allOrders || []).filter((order: any) => {
+    if (!order.status) {
+      console.log('⚠️ Order', order.order_id, 'has no status - excluding');
+      return false;
+    }
     
-    if (allError) {
-      console.error('Error fetching debug orders:', allError);
+    // Normalize status: trim whitespace and convert to lowercase for comparison
+    const status = String(order.status).toLowerCase().trim();
+    
+    // ONLY include orders with status 'confirmed' (case-insensitive)
+    // This handles: 'Confirmed', 'confirmed', 'CONFIRMED', etc.
+    // Exclude 'Pending' and all other statuses
+    const isValid = status === 'confirmed';
+    
+    if (isValid) {
+      console.log('✅ Order', order.order_id, 'with status', order.status, '(normalized:', status, ') INCLUDED in queue');
     } else {
-      console.log('Debug: Found orders with pending/confirmed status:', allOrders?.length || 0);
-      console.log('Sample orders:', allOrders);
-      
-      // Also check all statuses to see what exists
-      const { data: statusCheck, error: statusError } = await supabase
-        .from('orders')
-        .select('order_id, status')
-        .limit(50);
-      
-      if (!statusError && statusCheck) {
-        const uniqueStatuses = [...new Set(statusCheck.map(o => o.status))];
-        console.log('All unique statuses found in orders table:', uniqueStatuses);
-        console.log('Count of orders with "confirmed" status:', statusCheck.filter(o => o.status === 'confirmed').length);
-        console.log('Count of orders with "pending" status:', statusCheck.filter(o => o.status === 'pending').length);
-      }
+      console.log('⚠️ Order', order.order_id, 'has status', order.status, '(normalized:', status, ') - NOT included (only Confirmed allowed, not Pending)');
+    }
+    
+    return isValid;
+  });
+  
+  console.log('✅ Found', pendingOrders.length, 'orders in queue (out of', allOrders?.length || 0, 'total without driver)');
+  
+  // Debug: Log all unique statuses found
+  if (allOrders && allOrders.length > 0) {
+    const uniqueStatuses = [...new Set(allOrders.map((o: any) => o.status))];
+    console.log('🔍 All statuses found (without driver):', uniqueStatuses);
+    console.log('🔍 Status counts:', uniqueStatuses.map(s => ({
+      status: s,
+      count: allOrders.filter((o: any) => o.status === s).length,
+      normalized: String(s).toLowerCase().trim(),
+      isIncluded: String(s).toLowerCase().trim() === 'confirmed'
+    })));
+    
+    // Specifically check for Confirmed orders
+    const confirmedOrders = allOrders.filter((o: any) => 
+      String(o.status).toLowerCase().trim() === 'confirmed'
+    );
+    console.log('🔍 Confirmed orders found (without driver):', confirmedOrders.length);
+    if (confirmedOrders.length > 0) {
+      console.log('🔍 Confirmed order IDs:', confirmedOrders.map((o: any) => o.order_id));
     }
   }
   
-  // Fetch restaurant details separately since we need to join on restaurant_id (text field)
+  if (pendingOrders.length > 0) {
+    console.log('✅ Sample order:', {
+      order_id: pendingOrders[0].order_id,
+      status: pendingOrders[0].status,
+      restaurant_id: pendingOrders[0].restaurant_id,
+      driver_id: pendingOrders[0].driver_id,
+      placed_at: pendingOrders[0].placed_at,
+      total: pendingOrders[0].total
+    });
+  } else {
+    console.warn('⚠️ No orders in queue!');
+    if (allOrders && allOrders.length > 0) {
+      console.warn('⚠️ Found', allOrders.length, 'orders without driver, but none match confirmed status');
+      console.warn('⚠️ Orders have statuses:', [...new Set(allOrders.map((o: any) => o.status))]);
+      
+      // Check if there are any Confirmed orders that should be included
+      const confirmedCount = allOrders.filter((o: any) => 
+        String(o.status).toLowerCase().trim() === 'confirmed'
+      ).length;
+      if (confirmedCount > 0) {
+        console.error('❌ ERROR: Found', confirmedCount, 'Confirmed orders but they are not in the queue!');
+        console.error('❌ This indicates a bug in the filter logic');
+      }
+    } else {
+      console.warn('⚠️ No orders found in database without driver_id');
+    }
+  }
+  
+  // Fetch restaurant details for each order
   const ordersWithRestaurants = await Promise.all(
-    (data || []).map(async (order: any) => {
+    pendingOrders.map(async (order: any) => {
       if (order.restaurant_id) {
         try {
           const { data: restaurant, error: restError } = await supabase
@@ -638,61 +805,161 @@ export async function getPendingOrders() {
     })
   );
   
-  console.log('Final orders with restaurants:', ordersWithRestaurants?.length || 0);
+  console.log('✅ Returning', ordersWithRestaurants.length, 'orders with restaurant details');
+  console.log('✅ Order IDs being returned:', ordersWithRestaurants.map((o: any) => o.order_id));
+  
+  // CRITICAL: Make sure we're actually returning the orders, not an empty array
+  if (ordersWithRestaurants.length === 0 && pendingOrders.length > 0) {
+    console.error('❌ ERROR: pendingOrders has', pendingOrders.length, 'orders but ordersWithRestaurants is empty!');
+    // Return pendingOrders even if restaurant fetch failed
+    return pendingOrders;
+  }
   
   return ordersWithRestaurants;
 }
 
-// Get orders assigned to a staff member
+// Get orders assigned to a staff member with Active status (driver assigned)
 export async function getStaffActiveOrders(staffId: string) {
+  console.log('🔵 getStaffActiveOrders() - Fetching active orders for staff:', staffId);
+  
+  // First, let's check what active orders exist in the database (for debugging)
+  const { data: allActiveDebug, error: debugError } = await supabase
+    .from('orders')
+    .select('order_id, status, driver_id')
+    .ilike('status', 'active') // Case-insensitive match
+    .order('updated_at', { ascending: false });
+
+  if (!debugError && allActiveDebug) {
+    console.log('🔍 All Active orders in database:', allActiveDebug.length);
+    allActiveDebug.forEach((order: any) => {
+      console.log('  -', order.order_id, '| Status:', order.status, '| Driver:', order.driver_id || 'NULL');
+    });
+  }
+  
+  // Fetch all active orders (no staff_id filtering needed)
   const { data, error } = await supabase
     .from('orders')
     .select(`
       *,
-      restaurants (id, name, address, city, state),
       order_items (*)
     `)
-    .eq('staff_id', staffId)
-    .in('status', ['confirmed', 'preparing', 'ready', 'out_for_delivery'])
-    .order('created_at', { ascending: false });
+    .ilike('status', 'active') // Case-insensitive match for 'Active' status
+    .order('updated_at', { ascending: false });
 
-  if (error) throw error;
-  return data;
+  if (error) {
+    console.error('❌ Error fetching active orders:', error);
+    throw error;
+  }
+  
+  console.log('✅ Found', data?.length || 0, 'active orders');
+  
+  if (data && data.length > 0) {
+    console.log('📋 Active order IDs:', data.map((o: any) => o.order_id));
+    console.log('📋 Active order statuses:', [...new Set(data.map((o: any) => o.status))]);
+  }
+  
+  // Fetch restaurant details separately (like in getPendingOrders)
+  const ordersWithRestaurants = await Promise.all(
+    (data || []).map(async (order: any) => {
+      if (order.restaurant_id) {
+        try {
+          const { data: restaurant, error: restError } = await supabase
+            .from('restaurants')
+            .select('restaurant_id, name, address, city, state')
+            .eq('restaurant_id', order.restaurant_id)
+            .single();
+          
+          if (restError) {
+            console.error(`Error fetching restaurant ${order.restaurant_id} for order ${order.order_id}:`, restError);
+            order.restaurants = null;
+          } else {
+            order.restaurants = restaurant;
+          }
+        } catch (err) {
+          console.error(`Exception fetching restaurant for order ${order.order_id}:`, err);
+          order.restaurants = null;
+        }
+      } else {
+        order.restaurants = null;
+      }
+      return order;
+    })
+  );
+  
+  return ordersWithRestaurants;
 }
 
-// Get delivered orders for a staff member
+// Get delivered orders for a staff member (today's deliveries)
 export async function getStaffDeliveredOrders(staffId: string) {
+  console.log('🔵 getStaffDeliveredOrders() - Fetching delivered orders for staff:', staffId);
+  
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayStart = today.toISOString();
+  
+  // Fetch orders first (without restaurant join to avoid column errors)
   const { data, error } = await supabase
     .from('orders')
     .select(`
       *,
-      restaurants (id, name, address, city, state),
       order_items (*)
     `)
-    .eq('staff_id', staffId)
-    .eq('status', 'delivered')
-    .order('updated_at', { ascending: false })
-    .limit(10);
+    .eq('status', 'Delivered')
+    .gte('delivered_at', todayStart) // Only today's deliveries
+    .order('delivered_at', { ascending: false });
 
-  if (error) throw error;
-  return data;
+  if (error) {
+    console.error('❌ Error fetching delivered orders:', error);
+    throw error;
+  }
+  
+  console.log('✅ Found', data?.length || 0, 'delivered orders today for staff');
+  
+  // Fetch restaurant details separately (like in getPendingOrders)
+  const ordersWithRestaurants = await Promise.all(
+    (data || []).map(async (order: any) => {
+      if (order.restaurant_id) {
+        try {
+          const { data: restaurant, error: restError } = await supabase
+            .from('restaurants')
+            .select('restaurant_id, name, address, city, state')
+            .eq('restaurant_id', order.restaurant_id)
+            .single();
+          
+          if (restError) {
+            console.error(`Error fetching restaurant ${order.restaurant_id} for order ${order.order_id}:`, restError);
+            order.restaurants = null;
+          } else {
+            order.restaurants = restaurant;
+          }
+        } catch (err) {
+          console.error(`Exception fetching restaurant for order ${order.order_id}:`, err);
+          order.restaurants = null;
+        }
+      } else {
+        order.restaurants = null;
+      }
+      return order;
+    })
+  );
+  
+  return ordersWithRestaurants;
 }
 
 // Assign order to staff member (retrieve from queue)
+// This assigns the order to staff but keeps it in queue until driver is assigned
 export async function assignOrderToStaff(orderId: string, staffId: string) {
   console.log('Assigning order to staff:', orderId, staffId);
   
-  // Try to match by order_id first (text field like "FD0001"), then by id (UUID)
-  let query = supabase
+  // Update updated_at, but keep status as Confirmed (Queued)
+  // Status will change to Active when driver is assigned
+  const { data, error } = await supabase
     .from('orders')
     .update({ 
-      staff_id: staffId,
-      status: 'confirmed'
-    });
-  
-  // Try order_id first (text like "FD0001"), then fallback to id (UUID)
-  const { data, error } = await query
-    .or(`order_id.eq.${orderId},id.eq.${orderId}`)
+      updated_at: new Date().toISOString()
+      // Don't change status - keep it as Confirmed (Queued) until driver assigned
+    })
+    .eq('order_id', orderId)
     .select()
     .single();
 
@@ -705,52 +972,169 @@ export async function assignOrderToStaff(orderId: string, staffId: string) {
   return data as Order;
 }
 
-// Assign driver to order
-export async function assignDriverToOrder(orderId: string, driverId: string, estimatedDelivery: string) {
+// Assign driver to order - sets status to Active, marks driver unavailable
+export async function assignDriverToOrder(orderId: string, driverId: string, staffId: string) {
+  console.log('🔵 assignDriverToOrder() - Assigning driver', driverId, 'to order', orderId);
+  
+  // First, mark the driver as unavailable
+  const { error: driverError } = await supabase
+    .from('drivers')
+    .update({ 
+      is_available: false
+    })
+    .eq('driver_id', driverId);
+
+  if (driverError) {
+    console.error('❌ Error updating driver availability:', driverError);
+    throw new Error(`Failed to update driver availability: ${driverError.message}`);
+  }
+  
+  console.log('✅ Driver marked as unavailable');
+
+  // Then update the order: set driver_id, status to Active
+  const updateData: any = {
+    driver_id: driverId,
+    status: 'Active',
+    updated_at: new Date().toISOString()
+  };
+
+  console.log('🔵 Updating order with:', updateData);
+
   const { data, error } = await supabase
     .from('orders')
-    .update({ 
-      driver_id: driverId,
-      status: 'out_for_delivery',
-      estimated_delivery: estimatedDelivery
-    })
-    .eq('id', orderId)
+    .update(updateData)
+    .eq('order_id', orderId)
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    console.error('❌ Error assigning driver to order:', error);
+    // If order update fails, try to revert driver availability
+    await supabase
+      .from('drivers')
+      .update({ is_available: true })
+      .eq('driver_id', driverId);
+    throw error;
+  }
+
+  console.log('✅ Order updated successfully:', data.order_id, 'Status:', data.status);
   return data as Order;
 }
 
-// Confirm delivery
+// Confirm delivery - sets status to Delivered, records delivered_at, makes driver available again
 export async function confirmDelivery(orderId: string, deliveredAt: string) {
+  console.log('🔵 confirmDelivery() - Confirming delivery for order', orderId);
+  
+  // First get the order to find the driver_id
+  const { data: orderData, error: fetchError } = await supabase
+    .from('orders')
+    .select('driver_id')
+    .eq('order_id', orderId)
+    .single();
+
+  if (fetchError) {
+    console.error('❌ Error fetching order for delivery confirmation:', fetchError);
+    throw fetchError;
+  }
+
+  console.log('✅ Found order with driver_id:', orderData.driver_id);
+
+  // Update the order: set status to Delivered, record delivered_at
   const { data, error } = await supabase
     .from('orders')
     .update({ 
-      status: 'delivered',
-      delivered_at: deliveredAt
+      status: 'Delivered',
+      delivered_at: deliveredAt,
+      updated_at: new Date().toISOString()
     })
-    .eq('id', orderId)
+    .eq('order_id', orderId)
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    console.error('❌ Error confirming delivery:', error);
+    throw error;
+  }
+
+  console.log('✅ Order status updated to Delivered');
+
+  // Make the driver available again
+  if (orderData.driver_id) {
+    const { error: driverError } = await supabase
+      .from('drivers')
+      .update({ 
+        is_available: true
+      })
+      .eq('driver_id', orderData.driver_id);
+
+    if (driverError) {
+      console.error('⚠️ Error updating driver availability after delivery:', driverError);
+      // Don't throw - delivery is confirmed, driver availability update is secondary
+    } else {
+      console.log('✅ Driver marked as available again');
+    }
+  }
+
   return data as Order;
 }
 
 // Get staff member by username
 export async function getStaffByUsername(username: string) {
-  const { data, error } = await supabase
+  console.log('🔵 getStaffByUsername() - Looking up staff:', username);
+  
+  // Don't use .single() - it throws when there are 0 rows
+  // Instead, fetch and handle the result
+  // Try different possible column names for username
+  let { data, error } = await supabase
     .from('staffuser')
     .select('*')
     .eq('username', username)
-    .single();
+    .limit(1);
+
+  // If that fails, try other possible column names
+  if (error || !data || data.length === 0) {
+    console.log('⚠️ Username column lookup failed, trying alternative column names...');
+    const { data: data2, error: error2 } = await supabase
+      .from('staffuser')
+      .select('*')
+      .or(`username.eq.${username},Username.eq.${username},user_name.eq.${username}`)
+      .limit(1);
+    
+    if (!error2 && data2 && data2.length > 0) {
+      data = data2;
+      error = null;
+    }
+  }
 
   if (error) {
-    console.error('Error fetching staff member:', error);
-    throw error;
+    console.error('❌ Error fetching staff member:', error);
+    // Don't throw - return null so caller can handle gracefully
+    return null;
   }
-  return data as StaffMember;
+  
+  if (!data || data.length === 0) {
+    console.warn('⚠️ No staff member found with username:', username);
+    // Return null instead of throwing - let the caller handle it
+    return null;
+  }
+  
+  const staffData = data[0];
+  console.log('✅ Found staff member:', staffData.username || staffData.Username || 'unknown');
+  
+  // Map the data to match StaffMember interface
+  const mapped: any = {
+    id: staffData.id || staffData.username || username,
+    username: staffData.username || staffData.Username || username,
+    name: staffData.name || `${staffData.firstname || ''} ${staffData.lastname || ''}`.trim() || username,
+    firstname: staffData.firstname || staffData.first_name || '',
+    lastname: staffData.lastname || staffData.last_name || '',
+    role: staffData.role || 'support',
+    email: staffData.email || `${username}@frontdash.app`,
+    password_hash: staffData.password_hash,
+    first_time_login: staffData.first_time_login !== undefined ? staffData.first_time_login : false
+  };
+  
+  return mapped as StaffMember;
 }
 
 // Update staff password
@@ -952,8 +1336,9 @@ export async function getDrivers() {
         is_available: isAvailable
       };
     })
-    // Filter out inactive drivers
+    // Filter to only show active drivers who are available
     .filter((driver: Driver) => {
+      return driver.employment_status === 'active' && driver.is_available === true;
       return driver.employment_status !== 'inactive' && driver.is_available !== false;
     });
 

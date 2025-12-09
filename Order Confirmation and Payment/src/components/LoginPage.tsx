@@ -104,29 +104,39 @@ export function LoginPage({ onLogin, onBackToHome }: LoginPageProps) {
         try {
           const staffMember = await getStaffByUsername(credentials.username);
           
-          // Simple password check (in production, use proper hashing)
-          // For demo, check if password_hash exists or use demo accounts
-          const passwordHash = btoa(credentials.password);
-          const isValidPassword = staffMember.password_hash === passwordHash || 
-            !staffMember.password_hash; // Allow demo accounts without password_hash
+          // If staff member found in database, use it
+          if (staffMember) {
+            // Simple password check (in production, use proper hashing)
+            // For demo, check if password_hash exists or use demo accounts
+            const passwordHash = btoa(credentials.password);
+            const isValidPassword = staffMember.password_hash === passwordHash || 
+              !staffMember.password_hash; // Allow demo accounts without password_hash
+
+            if (isValidPassword) {
+              const account = {
+                username: staffMember.username || credentials.username,
+                name: staffMember.name || `${staffMember.firstname || ''} ${staffMember.lastname || ''}`.trim() || credentials.username,
+                role: staffMember.role || 'support',
+                email: staffMember.email || `${credentials.username}@frontdash.app`,
+                id: staffMember.id || credentials.username,
+                firstTimeLogin: staffMember.first_time_login
+              };
+              
+              toast.success(`Welcome back, ${account.name}!`);
+              onLogin('staff', account);
+              setIsLoading(false);
+              return;
+            }
+          }
           
-          // Also check demo accounts as fallback
+          // Fallback to demo accounts if database lookup failed or password invalid
           const demoAccount = demoAccounts.staff.find(acc => 
             acc.username === credentials.username && acc.password === credentials.password
           );
 
-          if (isValidPassword || demoAccount) {
-            const account = demoAccount || {
-              username: staffMember.username,
-              name: staffMember.name,
-              role: staffMember.role,
-              email: staffMember.email || `${staffMember.username}@frontdash.app`,
-              id: staffMember.id,
-              firstTimeLogin: staffMember.first_time_login
-            };
-            
-            toast.success(`Welcome back, ${account.name}!`);
-            onLogin('staff', account);
+          if (demoAccount) {
+            toast.success(`Welcome back, ${demoAccount.name}!`);
+            onLogin('staff', demoAccount);
             setIsLoading(false);
             return;
           } else {
@@ -136,8 +146,23 @@ export function LoginPage({ onLogin, onBackToHome }: LoginPageProps) {
             return;
           }
         } catch (error: any) {
-          // Fallback to demo accounts if database lookup fails
+          // Fallback to demo accounts if database lookup throws an error
           console.log('Database lookup failed, trying demo accounts:', error);
+          const demoAccount = demoAccounts.staff.find(acc => 
+            acc.username === credentials.username && acc.password === credentials.password
+          );
+          
+          if (demoAccount) {
+            toast.success(`Welcome back, ${demoAccount.name}!`);
+            onLogin('staff', demoAccount);
+            setIsLoading(false);
+            return;
+          } else {
+            toast.error('Invalid credentials. Please check your username and password.');
+            setErrors(['Invalid username or password']);
+            setIsLoading(false);
+            return;
+          }
         }
       }
 
