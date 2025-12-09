@@ -7,7 +7,11 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'your-anon-key
 // Log configuration (only in development)
 if (import.meta.env.DEV) {
   console.log('Supabase URL:', supabaseUrl?.substring(0, 30) + '...');
-  console.log('Supabase Key configured:', !!supabaseAnonKey && supabaseAnonKey !== 'your-anon-key');
+  const isConfigured = !!supabaseAnonKey && supabaseAnonKey !== 'your-anon-key' && supabaseUrl !== 'https://your-project.supabase.co';
+  console.log('Supabase Key configured:', isConfigured);
+  if (!isConfigured) {
+    console.warn('⚠️ Supabase is not configured! Please create a .env file with VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY');
+  }
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);

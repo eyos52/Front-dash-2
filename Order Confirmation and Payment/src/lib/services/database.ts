@@ -1437,14 +1437,31 @@ export async function assignDriverToOrder(orderId: string, driverId: string, sta
   console.log('🔵 assignDriverToOrder() - Assigning driver', driverId, 'to order', orderId);
   
   // First, mark the driver as unavailable
-  const { error: driverError } = await supabase
+  // Try driver_id first, then fallback to id if driver_id doesn't exist
+  let driverUpdateQuery = supabase
     .from('drivers')
     .update({ 
       is_available: false
     })
     .eq('driver_id', driverId);
 
-  if (driverError) {
+  const { error: driverError } = await driverUpdateQuery;
+
+  // If driver_id column doesn't exist, try using id column
+  if (driverError && (driverError.message.includes('column') || driverError.code === '42703')) {
+    console.log('⚠️ driver_id column not found, trying id column...');
+    const { error: driverErrorById } = await supabase
+      .from('drivers')
+      .update({ 
+        is_available: false
+      })
+      .eq('id', driverId);
+    
+    if (driverErrorById) {
+      console.error('❌ Error updating driver availability:', driverErrorById);
+      throw new Error(`Failed to update driver availability: ${driverErrorById.message}`);
+    }
+  } else if (driverError) {
     console.error('❌ Error updating driver availability:', driverError);
     throw new Error(`Failed to update driver availability: ${driverError.message}`);
   }
@@ -1470,10 +1487,23 @@ export async function assignDriverToOrder(orderId: string, driverId: string, sta
   if (error) {
     console.error('❌ Error assigning driver to order:', error);
     // If order update fails, try to revert driver availability
-    await supabase
-      .from('drivers')
-      .update({ is_available: true })
-      .eq('driver_id', driverId);
+    try {
+      // Try to revert using driver_id
+      await supabase
+        .from('drivers')
+        .update({ is_available: true })
+        .eq('driver_id', driverId);
+    } catch (revertError) {
+      // If that fails, try using id
+      try {
+        await supabase
+          .from('drivers')
+          .update({ is_available: true })
+          .eq('id', driverId);
+      } catch (revertError2) {
+        console.warn('⚠️ Could not revert driver availability:', revertError2);
+      }
+    }
     throw error;
   }
 
@@ -1520,14 +1550,33 @@ export async function confirmDelivery(orderId: string, deliveredAt: string) {
 
   // Make the driver available again
   if (orderData.driver_id) {
-    const { error: driverError } = await supabase
+    // Try driver_id first, then fallback to id if driver_id doesn't exist
+    let driverUpdateQuery = supabase
       .from('drivers')
       .update({ 
         is_available: true
       })
       .eq('driver_id', orderData.driver_id);
 
-    if (driverError) {
+    const { error: driverError } = await driverUpdateQuery;
+
+    // If driver_id column doesn't exist, try using id column
+    if (driverError && (driverError.message.includes('column') || driverError.code === '42703')) {
+      console.log('⚠️ driver_id column not found, trying id column...');
+      const { error: driverErrorById } = await supabase
+        .from('drivers')
+        .update({ 
+          is_available: true
+        })
+        .eq('id', orderData.driver_id);
+      
+      if (driverErrorById) {
+        console.error('⚠️ Error updating driver availability after delivery:', driverErrorById);
+        // Don't throw - delivery is confirmed, driver availability update is secondary
+      } else {
+        console.log('✅ Driver marked as available again');
+      }
+    } else if (driverError) {
       console.error('⚠️ Error updating driver availability after delivery:', driverError);
       // Don't throw - delivery is confirmed, driver availability update is secondary
     } else {
@@ -1761,11 +1810,10 @@ export async function deleteStaffMember(identifier: string) {
 // ========== DRIVER OPERATIONS ==========
 
 export async function getDrivers() {
-  // Query all columns ordered by full_name
+  // Query all columns - we'll sort in JavaScript to handle different column name possibilities
   const { data, error } = await supabase
     .from('drivers')
-    .select('*')
-    .order('full_name', { ascending: true });
+    .select('*');
 
   if (error) {
     console.error('Error fetching drivers:', error);
@@ -1779,10 +1827,20 @@ export async function getDrivers() {
   }
 
   // Map the data to match our interface
-  // Filter out inactive drivers (employment_status = 'inactive' or is_available = false)
   const mappedData = (data || [])
     .map((driver: any) => {
-      const fullName = driver.full_name || driver['Full name'] || driver.Full_name || driver['full name'] || driver.name || '';
+      // Handle different possible column names for full name
+      let fullName = '';
+      if (driver.full_name) {
+        fullName = driver.full_name;
+      } else if (driver['Full name']) {
+        fullName = driver['Full name'];
+      } else if (driver.first_name && driver.last_name) {
+        fullName = `${driver.first_name} ${driver.last_name}`;
+      } else if (driver.name) {
+        fullName = driver.name;
+      }
+      
       const driverId = driver.driver_id || driver.id || '';
       const phone = driver.phone || '';
       const employmentStatus = driver.employment_status || driver.status || 'active';
@@ -1796,10 +1854,11 @@ export async function getDrivers() {
         is_available: isAvailable
       };
     })
+    // Sort by full name in JavaScript if needed
+    .sort((a, b) => a['Full name'].localeCompare(b['Full name']))
     // Filter to only show active drivers who are available
     .filter((driver: Driver) => {
       return driver.employment_status === 'active' && driver.is_available === true;
-      return driver.employment_status !== 'inactive' && driver.is_available !== false;
     });
 
   return mappedData as Driver[];

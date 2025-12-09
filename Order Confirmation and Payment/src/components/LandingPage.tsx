@@ -228,7 +228,21 @@ export function LandingPage({ onNavigate, onOrderFood, onRestaurantSelect, cart,
           ) : error ? (
             <div className="text-center py-12">
               <p className="text-red-500 text-lg mb-2">Error loading restaurants</p>
-              <p className="text-gray-500 text-sm">{error}</p>
+              <p className="text-gray-500 text-sm mb-4">{error}</p>
+              {(error.includes('Failed to fetch') || error.includes('your-project.supabase.co') || error.includes('your-anon-key')) && (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 max-w-2xl mx-auto text-left">
+                  <p className="font-semibold text-yellow-800 mb-2">⚠️ Supabase Configuration Issue</p>
+                  <p className="text-sm text-yellow-700 mb-2">It looks like Supabase isn't configured. Please:</p>
+                  <ol className="text-sm text-yellow-700 list-decimal list-inside space-y-1">
+                    <li>Create a <code className="bg-yellow-100 px-1 rounded">.env</code> file in the project root</li>
+                    <li>Add your Supabase credentials:
+                      <pre className="bg-yellow-100 p-2 rounded mt-1 text-xs overflow-x-auto">VITE_SUPABASE_URL=your-project-url<br/>VITE_SUPABASE_ANON_KEY=your-anon-key</pre>
+                    </li>
+                    <li>Restart the development server</li>
+                    <li>Make sure you've run the database schema in Supabase</li>
+                  </ol>
+                </div>
+              )}
             </div>
           ) : currentStores.length > 0 ? (
             <>
