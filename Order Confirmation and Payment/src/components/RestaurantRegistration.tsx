@@ -203,7 +203,8 @@ export function RestaurantRegistration({ onNavigateHome, onNavigateLogin }: Rest
         opening_time: formData.openingTime,
         closing_time: formData.closingTime,
         menu_file_url: menuFileUrl || '', // Use empty string if no file uploaded
-        logo_file_url: logoFileUrl || undefined
+        logo_file_url: logoFileUrl || undefined,
+        password: formData.password // Include password for authentication
       });
       
       setShowSuccess(true);

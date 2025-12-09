@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Alert, AlertDescription } from './ui/alert';
 import { toast } from 'sonner@2.0.3';
 import { Shield, Store, Eye, EyeOff } from 'lucide-react';
-import { getStaffByUsername } from '../lib/services/database';
+import { getStaffByUsername, getRestaurantByUsername, getRestaurantsWithCredentials, getRestaurantAuthInfo } from '../lib/services/database';
 
 interface LoginPageProps {
   onLogin: (userType: 'restaurant' | 'admin' | 'staff', userInfo: any) => void;
@@ -29,9 +29,10 @@ export function LoginPage({ onLogin, onBackToHome }: LoginPageProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
+  const [restaurantAccounts, setRestaurantAccounts] = useState<any[]>([]);
 
-  // Demo accounts for testing
-  const demoAccounts = {
+  // Base demo accounts for testing
+  const baseDemoAccounts = {
     restaurant: [
       { username: 'allchicken', password: 'Chicken123!', name: 'All Chicken Meals', email: 'laura@allchicken.com', restaurant_id: '001' },
       { username: 'pizzaonly', password: 'Pizza123!', name: 'Pizza Only', email: 'russel@pizzaonly.com', restaurant_id: '002' },
@@ -56,6 +57,35 @@ export function LoginPage({ onLogin, onBackToHome }: LoginPageProps) {
       { username: 'driver.manager', password: 'Staff123!', name: 'James Wilson', role: 'Driver Manager' }
     ]
   };
+
+  // Combine base demo accounts with restaurant accounts from database
+  const demoAccounts = {
+    ...baseDemoAccounts,
+    restaurant: [...baseDemoAccounts.restaurant, ...restaurantAccounts]
+  };
+
+  // Load restaurant accounts from database on mount and when role changes to restaurant
+  useEffect(() => {
+    const loadRestaurantAccounts = async () => {
+      try {
+        const restaurants = await getRestaurantsWithCredentials();
+        console.log('Loaded restaurants with credentials:', restaurants);
+        // Filter out restaurants that already exist in base demo accounts
+        const newRestaurants = restaurants.filter(
+          (r: any) => !baseDemoAccounts.restaurant.some((demo: any) => demo.username === r.username)
+        );
+        console.log('New restaurants to add:', newRestaurants);
+        setRestaurantAccounts(newRestaurants);
+      } catch (error) {
+        console.error('Error loading restaurant accounts:', error);
+      }
+    };
+    loadRestaurantAccounts();
+    
+    // Refresh every 5 seconds to catch newly approved restaurants
+    const interval = setInterval(loadRestaurantAccounts, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   const validatePassword = (password: string): boolean => {
     // Password must contain at least one uppercase, one lowercase, one number, and one special character
@@ -141,7 +171,36 @@ export function LoginPage({ onLogin, onBackToHome }: LoginPageProps) {
         }
       }
 
-      // For restaurant and admin, use demo accounts
+      // For restaurant, authenticate from database
+      if (credentials.role === 'restaurant') {
+        try {
+          const authInfo = await getRestaurantAuthInfo(credentials.username);
+          
+          if (authInfo?.restaurant) {
+            // Check password - use stored hash if present, otherwise generated password hash
+            const passwordHashInput = btoa(credentials.password);
+            const isValidPassword = passwordHashInput === authInfo.passwordHash;
+            
+            if (isValidPassword) {
+              const account = {
+                username: authInfo.restaurant.restaurant_id || credentials.username,
+                name: authInfo.restaurant.name || 'Restaurant',
+                email: authInfo.restaurant.email || (authInfo.restaurant as any).contact_email || `${credentials.username}@frontdash.app`,
+                restaurant_id: authInfo.restaurant.restaurant_id || credentials.username
+              };
+              
+              toast.success(`Welcome back, ${account.name}!`);
+              onLogin('restaurant', account);
+              setIsLoading(false);
+              return;
+            }
+          }
+        } catch (error: any) {
+          console.log('Database lookup failed for restaurant, trying demo accounts:', error);
+        }
+      }
+
+      // Fallback to demo accounts for restaurant and admin
       const accountList = demoAccounts[credentials.role as 'restaurant' | 'admin' | 'staff'];
       const account = accountList.find(acc => 
         acc.username === credentials.username && acc.password === credentials.password
@@ -385,11 +444,18 @@ export function LoginPage({ onLogin, onBackToHome }: LoginPageProps) {
               <AlertDescription className="text-sm">
                 <div className="space-y-2">
                   <div className="font-medium text-gray-800">Available Demo Accounts:</div>
-                  <div className="grid grid-cols-1 gap-2 text-xs">
+                  <div className="grid grid-cols-1 gap-2 text-xs max-h-60 overflow-y-auto">
                     <div className="flex justify-between">
                       <span className="text-orange-700 font-medium">Restaurant:</span>
                       <span className="font-mono">tony.bistro / TonyPass123!</span>
                     </div>
+                    {/* Dynamically loaded restaurant accounts */}
+                    {restaurantAccounts.map((restaurant: any) => (
+                      <div key={restaurant.username} className="flex justify-between">
+                        <span className="text-orange-700 font-medium">Restaurant:</span>
+                        <span className="font-mono">{restaurant.username} / {restaurant.password}</span>
+                      </div>
+                    ))}
                     <div className="flex justify-between">
                       <span className="text-blue-700 font-medium">Admin:</span>
                       <span className="font-mono">admin / Admin123!</span>

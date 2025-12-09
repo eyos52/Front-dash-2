@@ -40,6 +40,101 @@ export async function getRestaurantById(id: string) {
   return data as Restaurant;
 }
 
+// Get restaurant by username for authentication
+export async function getRestaurantByUsername(username: string) {
+  const { data, error } = await supabase
+    .from('restaurants')
+    .select('*')
+    .eq('restaurant_id', username) // restaurant_id is used as username
+    .maybeSingle();
+
+  if (error) throw error;
+  return data as Restaurant | null;
+}
+
+// Get restaurant auth info (returns restaurant and a password hash, generating one if missing)
+export async function getRestaurantAuthInfo(username: string) {
+  const restaurant = await getRestaurantByUsername(username);
+  if (!restaurant) return null;
+
+  const passwordHash =
+    (restaurant as any).password_hash || hashPassword(generateRandomPassword(username));
+
+  return { restaurant, passwordHash };
+}
+
+// Get all restaurants with login credentials for demo accounts
+export async function getRestaurantsWithCredentials() {
+  try {
+    // Get all approved restaurants (regardless of password_hash column existence)
+    let query = supabase
+      .from('restaurants')
+      .select('restaurant_id, name, email, contact_email, password_hash, is_active, registration_status');
+    
+    // Filter for approved restaurants
+    query = query.eq('registration_status', 'approved');
+    
+    // Try to get restaurants
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('Error fetching restaurants with credentials:', error);
+      // If error is about column not existing, try without password_hash filter
+      if (error.message.includes('password_hash') || error.message.includes('column')) {
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from('restaurants')
+          .select('restaurant_id, name, email, contact_email, is_active, registration_status')
+          .eq('registration_status', 'approved');
+        
+        if (fallbackError) {
+          console.error('Error fetching restaurants (fallback):', fallbackError);
+          return [];
+        }
+        
+        // Generate credentials for all approved restaurants
+        return (fallbackData || []).map((restaurant: any) => ({
+          username: restaurant.restaurant_id,
+          password: generateRandomPassword(restaurant.restaurant_id),
+          name: restaurant.name,
+          email: restaurant.email || restaurant.contact_email || `${restaurant.restaurant_id}@frontdash.app`,
+          restaurant_id: restaurant.restaurant_id
+        }));
+      }
+      return [];
+    }
+
+    // All approved restaurants should be included
+    const restaurantsWithCredentials = (data || []).filter((r: any) => 
+      r.registration_status === 'approved'
+    );
+
+    // Map to demo account format
+    // Generate password from username (since we don't store plain password)
+    // For restaurants with REST-{timestamp} format, generate a username from the name
+    return restaurantsWithCredentials.map((restaurant: any) => {
+      // If restaurant_id is in REST-{timestamp} format, generate username from name
+      let username = restaurant.restaurant_id;
+      if (restaurant.restaurant_id && restaurant.restaurant_id.startsWith('REST-')) {
+        // Generate username from restaurant name for old format restaurants
+        username = generateUsernameFromRestaurantName(restaurant.name);
+        // Make it unique by checking if it exists
+        // For now, just use the generated one - duplicates will be handled by the filter
+      }
+      
+      return {
+        username: username,
+        password: generateRandomPassword(username), // Regenerate password from username
+        name: restaurant.name,
+        email: restaurant.email || restaurant.contact_email || `${username}@frontdash.app`,
+        restaurant_id: restaurant.restaurant_id
+      };
+    });
+  } catch (error: any) {
+    console.error('Error in getRestaurantsWithCredentials:', error);
+    return [];
+  }
+}
+
 // Helper function to generate a random unique restaurant_id
 async function generateUniqueRestaurantId(): Promise<string> {
   const maxRetries = 10;
@@ -92,7 +187,98 @@ async function generateUniqueRestaurantId(): Promise<string> {
   return fallbackId;
 }
 
-export async function createRestaurantRegistration(registration: Omit<RestaurantRegistration, 'id' | 'submission_date' | 'status' | 'decision_date' | 'reviewed_by'>) {
+// Helper function to generate username from restaurant name
+function generateUsernameFromRestaurantName(restaurantName: string): string {
+  // Convert to lowercase, remove special characters, replace spaces with dots
+  let username = restaurantName
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, '') // Remove special characters
+    .replace(/\s+/g, '.') // Replace spaces with dots
+    .replace(/\.+/g, '.') // Replace multiple dots with single dot
+    .replace(/^\.|\.$/g, ''); // Remove leading/trailing dots
+  
+  // Limit length
+  if (username.length > 30) {
+    username = username.substring(0, 30);
+  }
+  
+  return username;
+}
+
+// Helper function to generate random password based on username
+// Example: jake.fyne -> RakeFyne123! (first letter of second part, rest of first part, first letter + rest of second part)
+export function generateRandomPassword(username: string): string {
+  // Remove dots and split into parts
+  const parts = username.toLowerCase().split('.').filter(p => p.length > 0);
+  
+  if (parts.length === 0) {
+    // Fallback if no valid parts
+    return 'Restaurant123!';
+  }
+  
+  let password = '';
+  
+  if (parts.length >= 2) {
+    // If we have multiple parts (e.g., jake.fyne)
+    // Take first letter of second part capitalized, then rest of first part, then first letter + rest of second part
+    const firstPart = parts[0];
+    const secondPart = parts[1];
+    
+    // First letter of second part capitalized
+    if (secondPart.length > 0) {
+      password += secondPart[0].toUpperCase();
+    }
+    
+    // Rest of first part
+    if (firstPart.length > 1) {
+      password += firstPart.substring(1);
+    } else if (firstPart.length === 1) {
+      password += firstPart;
+    }
+    
+    // First letter of second part (already capitalized) + rest of second part
+    if (secondPart.length > 0) {
+      password += secondPart[0].toUpperCase();
+      if (secondPart.length > 1) {
+        password += secondPart.substring(1);
+      }
+    }
+  } else {
+    // Single part: capitalize first letter, add rest
+    const part = parts[0];
+    if (part.length > 0) {
+      password += part[0].toUpperCase();
+      if (part.length > 1) {
+        password += part.substring(1);
+      }
+    }
+  }
+  
+  // Add numbers
+  password += '123';
+  
+  // Add special character
+  password += '!';
+  
+  // Ensure minimum length of 8 characters
+  while (password.length < 8) {
+    password += Math.random().toString(36).substring(2, 3);
+  }
+  
+  // Limit to reasonable length
+  if (password.length > 20) {
+    password = password.substring(0, 20);
+  }
+  
+  return password;
+}
+
+// Helper function to hash password (simple base64 encoding for now - in production use proper hashing)
+export function hashPassword(password: string): string {
+  return btoa(password); // Simple base64 encoding - in production, use bcrypt or similar
+}
+
+export async function createRestaurantRegistration(registration: Omit<RestaurantRegistration, 'id' | 'submission_date' | 'status' | 'decision_date' | 'reviewed_by'> & { password?: string }) {
   // Generate random ID for the request itself
   const randomId = `REQ-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
   
@@ -102,8 +288,45 @@ export async function createRestaurantRegistration(registration: Omit<Restaurant
   // Combine owner first and last name for contact_name
   const contactName = `${registration.owner_first_name} ${registration.owner_last_name}`.trim();
   
-  // Build note with additional information (cuisine type, description, hours)
-  // Store structured data in note for parsing: "Cuisine: X | Description: Y | Hours: HH:MM-HH:MM | City: X | State: Y | Zip: Z"
+  // Generate username from restaurant name
+  const baseUsername = generateUsernameFromRestaurantName(registration.restaurant_name);
+  
+  // Check if username already exists in restaurants or requests
+  let username = baseUsername;
+  let usernameCounter = 1;
+  while (true) {
+    const { data: existingRestaurant } = await supabase
+      .from('restaurants')
+      .select('restaurant_id')
+      .eq('restaurant_id', username)
+      .maybeSingle();
+    
+    const { data: existingRequest } = await supabase
+      .from('requests')
+      .select('id')
+      .eq('kind', 'registration')
+      .eq('restaurant_id', username)
+      .maybeSingle();
+    
+    if (!existingRestaurant && !existingRequest) {
+      break; // Username is available
+    }
+    
+    username = `${baseUsername}${usernameCounter}`;
+    usernameCounter++;
+    
+    // Safety check to prevent infinite loop
+    if (usernameCounter > 1000) {
+      username = `${baseUsername}${Date.now()}`;
+      break;
+    }
+  }
+  
+  // Hash password if provided
+  const passwordHash = registration.password ? hashPassword(registration.password) : null;
+  
+  // Build note with additional information (cuisine type, description, hours, credentials)
+  // Store structured data in note for parsing: "Cuisine: X | Description: Y | Hours: HH:MM-HH:MM | City: X | State: Y | Zip: Z | Username: X | PasswordHash: Y"
   const noteParts = [];
   if (registration.cuisine_type) {
     noteParts.push(`Cuisine: ${registration.cuisine_type}`);
@@ -118,6 +341,13 @@ export async function createRestaurantRegistration(registration: Omit<Restaurant
   noteParts.push(`City: ${registration.city}`);
   noteParts.push(`State: ${registration.state}`);
   noteParts.push(`Zip: ${registration.zip_code}`);
+  // Store credentials in note
+  if (username) {
+    noteParts.push(`Username: ${username}`);
+  }
+  if (passwordHash) {
+    noteParts.push(`PasswordHash: ${passwordHash}`);
+  }
   const note = noteParts.join(' | ').trim();
   
   // Store full address in proposed_address (street address only, city/state/zip in note)
@@ -129,7 +359,7 @@ export async function createRestaurantRegistration(registration: Omit<Restaurant
     .insert([{
       id: randomId,
       kind: 'registration',
-      restaurant_id: randomRestaurantId,
+      restaurant_id: username, // Use username as restaurant_id for now
       status: 'pending',
       proposed_name: registration.restaurant_name,
       proposed_contact_name: contactName,
@@ -166,19 +396,21 @@ export async function getRestaurantRegistrations(status?: 'pending' | 'approved'
 }
 
 // Helper function to parse data from note field
-function parseNoteData(note: string | null): { city: string; state: string; zip: string; operatingHours: string; cuisine: string; description: string } {
+function parseNoteData(note: string | null): { city: string; state: string; zip: string; operatingHours: string; cuisine: string; description: string; username: string; passwordHash: string } {
   const result = {
     city: '',
     state: '',
     zip: '',
     operatingHours: '',
     cuisine: '',
-    description: ''
+    description: '',
+    username: '',
+    passwordHash: ''
   };
 
   if (!note) return result;
 
-  // Parse structured note format: "Cuisine: X | Description: Y | Hours: HH:MM-HH:MM | City: X | State: Y | Zip: Z"
+  // Parse structured note format: "Cuisine: X | Description: Y | Hours: HH:MM-HH:MM | City: X | State: Y | Zip: Z | Username: X | PasswordHash: Y"
   const parts = note.split('|').map(p => p.trim());
   
   for (const part of parts) {
@@ -196,6 +428,10 @@ function parseNoteData(note: string | null): { city: string; state: string; zip:
       result.cuisine = part.replace('Cuisine:', '').trim();
     } else if (part.startsWith('Description:')) {
       result.description = part.replace('Description:', '').trim();
+    } else if (part.startsWith('Username:')) {
+      result.username = part.replace('Username:', '').trim();
+    } else if (part.startsWith('PasswordHash:')) {
+      result.passwordHash = part.replace('PasswordHash:', '').trim();
     }
   }
 
@@ -203,29 +439,78 @@ function parseNoteData(note: string | null): { city: string; state: string; zip:
 }
 
 // Helper function to create restaurant from approved request
-async function createRestaurantFromRequest(request: any): Promise<void> {
+// Returns the generated credentials
+async function createRestaurantFromRequest(request: any): Promise<{ username: string; password: string; restaurantName: string }> {
+  // Parse data from note field (includes username)
+  const noteData = parseNoteData(request.note);
+  
+  // Get restaurant name
+  const restaurantName = request.proposed_name || 'New Restaurant';
+  
+  // Determine the username/restaurant_id to use
+  let restaurantId: string;
+  
+  // If username exists in note, use it
+  if (noteData.username) {
+    restaurantId = noteData.username;
+  } else {
+    // Generate username from restaurant name if not in note
+    const baseUsername = generateUsernameFromRestaurantName(restaurantName);
+    
+    // Check if this username already exists
+    let username = baseUsername;
+    let usernameCounter = 1;
+    while (true) {
+      const { data: existing } = await supabase
+        .from('restaurants')
+        .select('restaurant_id')
+        .eq('restaurant_id', username)
+        .maybeSingle();
+      
+      if (!existing) {
+        break; // Username is available
+      }
+      
+      username = `${baseUsername}${usernameCounter}`;
+      usernameCounter++;
+      
+      if (usernameCounter > 1000) {
+        username = `${baseUsername}${Date.now()}`;
+        break;
+      }
+    }
+    
+    restaurantId = username;
+  }
+  
   // Check if restaurant already exists
   const { data: existingRestaurant } = await supabase
     .from('restaurants')
     .select('restaurant_id')
-    .eq('restaurant_id', request.restaurant_id)
+    .eq('restaurant_id', restaurantId)
     .single();
 
   if (existingRestaurant) {
-    console.log(`Restaurant with ID ${request.restaurant_id} already exists, skipping creation`);
-    return;
+    console.log(`Restaurant with ID ${restaurantId} already exists, skipping creation`);
+    // Return existing restaurant credentials
+    return {
+      username: restaurantId,
+      password: generateRandomPassword(restaurantId),
+      restaurantName: restaurantName
+    };
   }
 
-  // Parse data from note field
-  const noteData = parseNoteData(request.note);
+  // Generate random password for the restaurant based on username
+  const randomPassword = generateRandomPassword(restaurantId); // Use username (restaurantId) for password generation
+  const passwordHash = hashPassword(randomPassword);
 
   // Create restaurant entry with all required fields
   const restaurantData: any = {
-    restaurant_id: request.restaurant_id,
+    restaurant_id: restaurantId,
     registration_status: 'approved',
     is_active: true,
     // withdrawal_status is now nullable, so we can omit it or set to null
-    name: request.proposed_name || 'New Restaurant',
+    name: restaurantName,
     contact_name: request.proposed_contact_name || 'Restaurant Owner',
     contact_email: request.proposed_contact_email || '',
     contact_phone: request.proposed_phone || '',
@@ -234,7 +519,12 @@ async function createRestaurantFromRequest(request: any): Promise<void> {
     city: noteData.city || null,
     state: noteData.state || null,
     zip: noteData.zip || null,
-    operating_hours: noteData.operatingHours || null
+    operating_hours: noteData.operatingHours || null,
+    // Store credentials for login
+    username: restaurantId, // Username is the restaurant_id
+    password_hash: passwordHash
+    // Note: We don't store plain_password in the database for security
+    // The password can be regenerated from the username when needed
   };
 
   const { error: restaurantError } = await supabase
@@ -247,14 +537,34 @@ async function createRestaurantFromRequest(request: any): Promise<void> {
     if (restaurantError.code === '23505' || restaurantError.message.includes('duplicate')) {
       console.warn('Restaurant with this ID already exists, skipping creation');
     } else {
-      throw new Error(`Failed to create restaurant: ${restaurantError.message}`);
+      // If columns don't exist, try without them
+      if (restaurantError.message.includes('column') && (restaurantError.message.includes('username') || restaurantError.message.includes('password_hash'))) {
+        console.warn('Username/password_hash columns may not exist, trying without them');
+        delete restaurantData.username;
+        delete restaurantData.password_hash;
+        const { error: retryError } = await supabase
+          .from('restaurants')
+          .insert([restaurantData]);
+        if (retryError) {
+          throw new Error(`Failed to create restaurant: ${retryError.message}`);
+        }
+      } else {
+        throw new Error(`Failed to create restaurant: ${restaurantError.message}`);
+      }
     }
   } else {
     console.log('Restaurant created successfully:', restaurantData.restaurant_id);
   }
+  
+  // Return the generated credentials
+  return {
+    username: restaurantId,
+    password: randomPassword,
+    restaurantName: restaurantName
+  };
 }
 
-export async function updateRestaurantRegistrationStatus(id: string, status: 'approved' | 'rejected', reviewerId: string) {
+export async function updateRestaurantRegistrationStatus(id: string, status: 'approved' | 'rejected', reviewerId: string): Promise<{ username?: string; password?: string; restaurantName?: string } | null> {
   // First, get the request to retrieve registration data
   const { data: request, error: fetchError } = await supabase
     .from('requests')
@@ -268,9 +578,10 @@ export async function updateRestaurantRegistrationStatus(id: string, status: 'ap
     throw fetchError;
   }
 
-  // If approving, create a restaurant entry
+  // If approving, create a restaurant entry and get credentials
+  let credentials = null;
   if (status === 'approved' && request) {
-    await createRestaurantFromRequest(request);
+    credentials = await createRestaurantFromRequest(request);
   }
 
   // Update the request status and decided_at timestamp
@@ -294,7 +605,9 @@ export async function updateRestaurantRegistrationStatus(id: string, status: 'ap
     console.error('Error updating registration status:', error);
     throw error;
   }
-  return data as any;
+
+  // Return the updated request data along with credentials if approved
+  return { ...data, credentials } as any;
 }
 
 // Function to backfill approved requests that haven't been moved to restaurants table
@@ -1054,10 +1367,33 @@ export async function getWithdrawalRequests() {
 }
 
 export async function createWithdrawalRequest(request: Omit<WithdrawalRequest, 'id' | 'submission_date' | 'status'>) {
+  // The restaurant_id in withdrawal_requests must be a UUID (restaurants.id)
+  // But the request might contain a text restaurant_id, so we need to look up the UUID
+  let restaurantUuid = request.restaurant_id;
+  
+  // Check if restaurant_id is a UUID format (contains hyphens)
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(request.restaurant_id);
+  
+  if (!isUuid) {
+    // It's a text ID, look up the UUID from restaurants table
+    const { data: restaurant, error: lookupError } = await supabase
+      .from('restaurants')
+      .select('id')
+      .eq('restaurant_id', request.restaurant_id)
+      .single();
+    
+    if (lookupError || !restaurant) {
+      throw new Error(`Restaurant not found with ID: ${request.restaurant_id}`);
+    }
+    
+    restaurantUuid = restaurant.id;
+  }
+
   const { data, error } = await supabase
     .from('withdrawal_requests')
     .insert([{
       ...request,
+      restaurant_id: restaurantUuid,
       submission_date: new Date().toISOString(),
       status: 'pending'
     }])
@@ -1069,6 +1405,16 @@ export async function createWithdrawalRequest(request: Omit<WithdrawalRequest, '
 }
 
 export async function updateWithdrawalRequestStatus(id: string, status: 'approved' | 'rejected', reviewerId: string) {
+  // First, get the withdrawal request to find the restaurant_id
+  const { data: withdrawalRequest, error: fetchError } = await supabase
+    .from('withdrawal_requests')
+    .select('restaurant_id')
+    .eq('id', id)
+    .single();
+
+  if (fetchError) throw fetchError;
+
+  // Update the withdrawal request status
   const { data, error } = await supabase
     .from('withdrawal_requests')
     .update({
@@ -1081,6 +1427,56 @@ export async function updateWithdrawalRequestStatus(id: string, status: 'approve
     .single();
 
   if (error) throw error;
+
+  // If the withdrawal is denied (rejected), remove the restaurant from the platform
+  if (status === 'rejected' && withdrawalRequest?.restaurant_id) {
+    let restaurant = null;
+    
+    // Try to find the restaurant by UUID first (restaurant_id in withdrawal_requests should be UUID)
+    const { data: restaurantByUuid, error: uuidError } = await supabase
+      .from('restaurants')
+      .select('id, restaurant_id')
+      .eq('id', withdrawalRequest.restaurant_id)
+      .single();
+
+    if (restaurantByUuid && !uuidError) {
+      restaurant = restaurantByUuid;
+    } else {
+      // If not found by UUID, try by text restaurant_id (in case it was stored incorrectly)
+      const { data: restaurantByTextId, error: textIdError } = await supabase
+        .from('restaurants')
+        .select('id, restaurant_id')
+        .eq('restaurant_id', withdrawalRequest.restaurant_id)
+        .maybeSingle();
+
+      if (restaurantByTextId && !textIdError) {
+        restaurant = restaurantByTextId;
+      }
+    }
+
+    if (restaurant) {
+      // Remove the restaurant by setting status to 'suspended' (soft delete)
+      // This preserves data integrity while removing it from active listings
+      const { error: restaurantError } = await supabase
+        .from('restaurants')
+        .update({ 
+          status: 'suspended',
+          is_active: false 
+        })
+        .eq('id', restaurant.id);
+
+      if (restaurantError) {
+        console.error('Error removing restaurant:', restaurantError);
+        // Don't throw - the withdrawal request was already updated
+        // Just log the error
+      } else {
+        console.log(`Restaurant ${restaurant.restaurant_id || restaurant.id} has been removed from FrontDash`);
+      }
+    } else {
+      console.warn(`Restaurant not found for withdrawal request ${id}. Restaurant ID: ${withdrawalRequest.restaurant_id}`);
+    }
+  }
+
   return data as WithdrawalRequest;
 }
 

@@ -21,7 +21,12 @@ import {
   UserPlus,
   Check,
   X,
-  Plus
+  Plus,
+  CheckCircle2,
+  Mail,
+  Copy,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 interface RestaurantRegistration {
@@ -76,6 +81,9 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
   const [driverError, setDriverError] = useState<string | null>(null);
   const [isLoadingRegistrations, setIsLoadingRegistrations] = useState(false);
   const [isLoadingWithdrawals, setIsLoadingWithdrawals] = useState(false);
+  const [showApprovalModal, setShowApprovalModal] = useState(false);
+  const [approvedRestaurantCredentials, setApprovedRestaurantCredentials] = useState<{ username: string; password: string; restaurantName: string } | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
 
   // Load drivers from database
   useEffect(() => {
@@ -186,13 +194,19 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
     setIsLoadingRegistrations(true);
     try {
       // Use 'system' as reviewerId since we don't have auth set up
-      await updateRestaurantRegistrationStatus(id, 'approved', 'system');
+      const result = await updateRestaurantRegistrationStatus(id, 'approved', 'system');
       
       // Reload registrations
       const registrationsData = await getRestaurantRegistrations();
       setRegistrations(registrationsData);
       
-      toast.success('Restaurant registration approved successfully!');
+      // Show approval modal with credentials if available
+      if (result && result.credentials) {
+        setApprovedRestaurantCredentials(result.credentials);
+        setShowApprovalModal(true);
+      } else {
+        toast.success('Restaurant registration approved successfully!');
+      }
     } catch (error: any) {
       console.error('Error approving registration:', error);
       toast.error(error.message || 'Failed to approve registration');
@@ -246,7 +260,7 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
   };
 
   const handleRejectWithdrawal = async (id: string) => {
-    if (!confirm('Are you sure you want to reject this withdrawal request?')) {
+    if (!confirm('Are you sure you want to deny this withdrawal request? The restaurant will be removed from FrontDash.')) {
       return;
     }
 
@@ -258,10 +272,10 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
       const withdrawalsData = await getWithdrawalRequests();
       setWithdrawalRequests(withdrawalsData);
       
-      toast.success('Withdrawal request rejected.');
+      toast.success('Withdrawal request denied. Restaurant has been removed from FrontDash.');
     } catch (error: any) {
-      console.error('Error rejecting withdrawal:', error);
-      toast.error(error.message || 'Failed to reject withdrawal request');
+      console.error('Error denying withdrawal:', error);
+      toast.error(error.message || 'Failed to deny withdrawal request');
     } finally {
       setIsLoadingWithdrawals(false);
     }
@@ -627,7 +641,7 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
                                   onClick={() => handleRejectWithdrawal(request.id)}
                                   disabled={isLoadingWithdrawals}
                                 >
-                                  Reject
+                                  Deny
                                 </Button>
                               </div>
                             )}
@@ -1002,6 +1016,113 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
             </Button>
             <Button onClick={handleAddDriver} disabled={isLoadingDrivers}>
               {isLoadingDrivers ? 'Adding...' : 'Hire Driver'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Restaurant Approval Modal */}
+      <Dialog open={showApprovalModal} onOpenChange={setShowApprovalModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader className="text-center">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
+              <CheckCircle2 className="h-10 w-10 text-green-600" />
+            </div>
+            <DialogTitle className="text-2xl font-bold">Restaurant Approved!</DialogTitle>
+            <DialogDescription className="text-base mt-2">
+              Account credentials have been generated
+            </DialogDescription>
+          </DialogHeader>
+          
+          {approvedRestaurantCredentials && (
+            <div className="space-y-6 py-4">
+              {/* Restaurant Name */}
+              <div>
+                <Label className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Restaurant Name</Label>
+                <div className="mt-2 p-3 bg-gray-50 rounded-md border border-gray-200">
+                  <p className="text-lg font-medium text-gray-900">{approvedRestaurantCredentials.restaurantName}</p>
+                </div>
+              </div>
+
+              {/* Username */}
+              <div>
+                <Label className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Username</Label>
+                <div className="mt-2 flex items-center gap-2">
+                  <Input
+                    value={approvedRestaurantCredentials.username}
+                    readOnly
+                    className="font-mono bg-gray-50"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      navigator.clipboard.writeText(approvedRestaurantCredentials.username);
+                      toast.success('Username copied to clipboard');
+                    }}
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+
+              {/* Password */}
+              <div>
+                <Label className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Temporary Password</Label>
+                <div className="mt-2 flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Input
+                      type={showPassword ? 'text' : 'password'}
+                      value={approvedRestaurantCredentials.password}
+                      readOnly
+                      className="font-mono bg-gray-50 pr-10"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      navigator.clipboard.writeText(approvedRestaurantCredentials.password);
+                      toast.success('Password copied to clipboard');
+                    }}
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+
+              {/* Email Notification Info */}
+              <div className="bg-green-50 border border-green-200 rounded-md p-4">
+                <div className="flex items-start gap-3">
+                  <Mail className="h-5 w-5 text-green-600 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-medium text-green-800">Credentials sent by email</p>
+                    <p className="text-xs text-green-700 mt-1">
+                      These credentials have been automatically emailed to the restaurant.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button 
+              onClick={() => {
+                setShowApprovalModal(false);
+                setApprovedRestaurantCredentials(null);
+                setShowPassword(false);
+              }}
+              className="w-full bg-blue-600 hover:bg-blue-700"
+            >
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>
