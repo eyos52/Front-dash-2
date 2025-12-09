@@ -35,6 +35,7 @@ import {
 
 interface MenuItem {
   id: number;
+  menu_item_id?: string; // Database ID for updates
   name: string;
   price: number;
   description: string;
@@ -170,9 +171,9 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
           
           setRestaurant({
             name: restaurantData.name || '',
-            address: restaurantData.address || '',
-            phone: restaurantData.phone || '',
-            email: restaurantData.email || '',
+            address: restaurantData.address || restaurantData.street1 || '',
+            phone: restaurantData.contact_phone || restaurantData.phone || '',
+            email: restaurantData.contact_email || restaurantData.email || '',
             openingTime: formatTime(restaurantData.opening_time || '09:00'),
             closingTime: formatTime(restaurantData.closing_time || '21:00'),
             isRegistered: true,
@@ -201,6 +202,7 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
   const mappedMenuItems: MenuItem[] = useMemo(() => {
     return supabaseMenuItems.map((item, index) => ({
       id: index + 1, // Use index for component compatibility
+      menu_item_id: item.menu_item_id || item.id, // Preserve database ID for updates
       name: item.name || 'Menu Item',
       price: item.price || 0,
       description: item.description || '',
@@ -365,8 +367,8 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
   // Menu item validation
   const validateMenuItem = (item: Partial<MenuItem>): boolean => {
     return !!(item.name && item.name.trim() && 
-              item.price && item.price > 0 && 
-              item.description && item.description.trim());
+              item.price && item.price > 0);
+    // Description is optional
   };
 
   const addMenuItem = () => {
@@ -376,35 +378,109 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
       setEditingItem(null);
       alert('Menu item added successfully!');
     } else {
-      alert('Please fill in all required fields (Name, Price, Description)');
+      alert('Please fill in all required fields (Name, Price)');
     }
   };
 
-  const updateMenuItem = () => {
+  const updateMenuItem = async () => {
     if (editingItem && editingItem.id !== 0 && validateMenuItem(editingItem)) {
-      setMenuItems(menuItems.map(item => 
-        item.id === editingItem.id ? editingItem : item
-      ));
-      setEditingItem(null);
-      alert('Menu item updated successfully!');
+      try {
+        // Update in database if menu_item_id exists
+        if (editingItem.menu_item_id && restaurantId) {
+          const { error } = await supabase
+            .from('menu_items')
+            .update({
+              name: editingItem.name,
+              price: editingItem.price,
+              description: editingItem.description,
+              is_available: editingItem.availability === 'available'
+            })
+            .eq('menu_item_id', editingItem.menu_item_id);
+          
+          if (error) {
+            console.error('Error updating menu item:', error);
+            toast.error('Failed to update menu item in database');
+            return;
+          }
+        }
+        
+        // Update local state
+        setMenuItems(menuItems.map(item => 
+          item.id === editingItem.id ? editingItem : item
+        ));
+        setEditingItem(null);
+        toast.success('Menu item updated successfully!');
+      } catch (error) {
+        console.error('Exception updating menu item:', error);
+        toast.error('Failed to update menu item');
+      }
     } else {
-      alert('Please fill in all required fields (Name, Price, Description)');
+      toast.error('Please fill in all required fields (Name, Price)');
     }
   };
 
-  const deleteMenuItem = (id: number) => {
+  const deleteMenuItem = async (id: number) => {
     const item = menuItems.find(item => item.id === id);
+    if (!item) return;
+    
     if (confirm(`Are you sure you want to delete "${item?.name}"? This action cannot be undone.`)) {
-      setMenuItems(menuItems.filter(item => item.id !== id));
+      try {
+        // Delete from database if menu_item_id exists
+        if (item.menu_item_id) {
+          const { error } = await supabase
+            .from('menu_items')
+            .delete()
+            .eq('menu_item_id', item.menu_item_id);
+          
+          if (error) {
+            console.error('Error deleting menu item:', error);
+            toast.error('Failed to delete menu item from database');
+            return;
+          }
+        }
+        
+        // Update local state
+        setMenuItems(menuItems.filter(item => item.id !== id));
+        toast.success('Menu item deleted successfully!');
+      } catch (error) {
+        console.error('Exception deleting menu item:', error);
+        toast.error('Failed to delete menu item');
+      }
     }
   };
 
-  const toggleAvailability = (id: number) => {
-    setMenuItems(menuItems.map(item => 
-      item.id === id 
-        ? { ...item, availability: item.availability === 'available' ? 'unavailable' : 'available' }
-        : item
-    ));
+  const toggleAvailability = async (id: number) => {
+    const item = menuItems.find(item => item.id === id);
+    if (!item) return;
+    
+    const newAvailability = item.availability === 'available' ? 'unavailable' : 'available';
+    
+    try {
+      // Update in database if menu_item_id exists
+      if (item.menu_item_id && restaurantId) {
+        const { error } = await supabase
+          .from('menu_items')
+          .update({ is_available: newAvailability === 'available' })
+          .eq('menu_item_id', item.menu_item_id);
+        
+        if (error) {
+          console.error('Error updating menu item availability:', error);
+          toast.error('Failed to update availability');
+          return;
+        }
+      }
+      
+      // Update local state
+      setMenuItems(menuItems.map(item => 
+        item.id === id 
+          ? { ...item, availability: newAvailability }
+          : item
+      ));
+      toast.success(`Menu item marked as ${newAvailability}`);
+    } catch (error) {
+      console.error('Exception updating availability:', error);
+      toast.error('Failed to update availability');
+    }
   };
 
   const withdrawFromFrontDash = async () => {
@@ -460,12 +536,56 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
     return Object.keys(errors).length === 0;
   };
 
-  const handleUpdateInfo = () => {
-    if (validateContactInfo()) {
-      alert('Contact information updated successfully!');
-      setValidationErrors({});
-    } else {
+  const handleUpdateInfo = async () => {
+    if (!validateContactInfo()) {
       alert('Please fix the errors in the form');
+      return;
+    }
+    
+    if (!restaurantId) {
+      toast.error('Restaurant ID not found. Cannot update information.');
+      return;
+    }
+    
+    try {
+      // Update restaurant information in database
+      const updateData: any = {
+        name: restaurant.name,
+        contact_email: restaurant.email,
+        contact_phone: restaurant.phone
+      };
+      
+      // Also update address if it exists
+      if (restaurant.address) {
+        updateData.street1 = restaurant.address;
+        updateData.address = restaurant.address;
+      }
+      
+      // Try updating by restaurant_id first
+      let { error } = await supabase
+        .from('restaurants')
+        .update(updateData)
+        .eq('restaurant_id', restaurantId);
+      
+      // If that fails, try by id
+      if (error) {
+        const { error: idError } = await supabase
+          .from('restaurants')
+          .update(updateData)
+          .eq('id', restaurantId);
+        
+        if (idError) {
+          console.error('Error updating restaurant info:', idError);
+          toast.error('Failed to update contact information');
+          return;
+        }
+      }
+      
+      toast.success('Contact information updated successfully!');
+      setValidationErrors({});
+    } catch (error) {
+      console.error('Exception updating restaurant info:', error);
+      toast.error('Failed to update contact information');
     }
   };
 
@@ -858,11 +978,11 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
                   </div>
                   <div>
                     <Label htmlFor="itemDescription">
-                      Description <span className="text-red-500">*</span>
+                      Description
                     </Label>
                     <Textarea
                       id="itemDescription"
-                      placeholder="Describe your menu item"
+                      placeholder="Describe your menu item (optional)"
                       value={editingItem?.description || ''}
                       onChange={(e) => setEditingItem(prev => prev ? {...prev, description: e.target.value} : null)}
                       rows={3}
@@ -895,7 +1015,7 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
                   <Button 
                     onClick={editingItem?.id === 0 ? addMenuItem : updateMenuItem}
                     className="bg-orange-600 hover:bg-orange-700"
-                    disabled={!editingItem?.name?.trim() || !editingItem?.description?.trim() || !editingItem?.price || editingItem?.price <= 0}
+                    disabled={!editingItem?.name?.trim() || !editingItem?.price || editingItem?.price <= 0}
                   >
                     {editingItem?.id === 0 ? 'Add Item' : 'Update Item'}
                   </Button>
