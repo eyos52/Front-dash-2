@@ -177,6 +177,22 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
         order_number: order.order_number || order.order_id, // Map order_id to order_number for display
       }));
       
+      // Format active orders to ensure order_id is preserved
+      const formattedActive = (active || []).map((order: any) => ({
+        ...order,
+        id: order.id || order.order_id,
+        order_number: order.order_number || order.order_id,
+        order_id: order.order_id || order.order_number, // Ensure order_id exists
+      }));
+      
+      // Format delivered orders to ensure order_id is preserved
+      const formattedDelivered = (delivered || []).map((order: any) => ({
+        ...order,
+        id: order.id || order.order_id,
+        order_number: order.order_number || order.order_id,
+        order_id: order.order_id || order.order_number, // Ensure order_id exists
+      }));
+      
       console.log('Formatted pending orders:', formattedPending.length, formattedPending);
       console.log('Setting pendingOrders state with:', formattedPending);
       setPendingOrders(formattedPending as OrderWithDetails[]);
@@ -185,8 +201,8 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
       setTimeout(() => {
         console.log('State after setPendingOrders:', formattedPending.length);
       }, 100);
-      setActiveOrders(active as OrderWithDetails[]);
-      setDeliveredOrders(delivered as OrderWithDetails[]);
+      setActiveOrders(formattedActive as OrderWithDetails[]);
+      setDeliveredOrders(formattedDelivered as OrderWithDetails[]);
       // getDrivers() already filters to only active and available drivers
       setDrivers(driversList);
     } catch (error: any) {
@@ -580,7 +596,7 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
               <TableBody>
                 {activeOrders.map((order) => (
                   <TableRow key={order.id}>
-                    <TableCell className="font-medium">{order.order_number}</TableCell>
+                    <TableCell className="font-medium">{order.order_id || order.order_number || 'N/A'}</TableCell>
                     <TableCell>{order.restaurants?.name || 'Unknown'}</TableCell>
                     <TableCell>
                       {order.driver_id 
@@ -634,8 +650,8 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
               </TableHeader>
               <TableBody>
                 {deliveredOrders.slice(0, 3).map((order) => (
-                  <TableRow key={order.id}>
-                    <TableCell className="font-medium">{order.order_number}</TableCell>
+                  <TableRow key={order.id || order.order_id}>
+                    <TableCell className="font-medium">{order.order_id || order.order_number || 'N/A'}</TableCell>
                     <TableCell>{order.restaurants?.name || 'Unknown'}</TableCell>
                     <TableCell>
                       {order.delivered_at 
