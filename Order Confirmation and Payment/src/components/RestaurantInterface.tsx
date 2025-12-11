@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { validateEmail, validatePhone, formatPhone } from './utils/validation';
 import { useMenuItems } from '../lib/utils/hooks';
-import { getRestaurants, getOrdersByRestaurant, confirmOrder, createWithdrawalRequest, updateRestaurantOperatingHours } from '../lib/services/database';
+import { getRestaurants, getOrdersByRestaurant, confirmOrder, createWithdrawalRequest, updateRestaurantOperatingHours, getRestaurantByUsername, updateRestaurantPassword } from '../lib/services/database';
 import { supabase } from '../lib/supabase';
 import { toast } from 'sonner@2.0.3';
 import { Loader2, CheckCircle2 } from 'lucide-react';
@@ -83,6 +83,12 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
   const [showWithdrawDialog, setShowWithdrawDialog] = useState(false);
   const [hoursStatus, setHoursStatus] = useState<{ type: 'success' | 'error' | null; message?: string }>({ type: null });
   const [hoursSaving, setHoursSaving] = useState(false);
+  
+  // Password change state
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
   
   // Get initial hours based on restaurantId (will be overridden by database data if available)
   const getInitialHours = (): WeeklyHours => {
@@ -678,6 +684,73 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
     }
   };
 
+  const handleChangePassword = async () => {
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      toast.error('All fields are required');
+      return;
+    }
+
+    // Validate current password is numeric PIN
+    const currentPin = Number(currentPassword.trim());
+    if (isNaN(currentPin)) {
+      toast.error('Current PIN must be numeric');
+      return;
+    }
+
+    // Validate new password is numeric PIN (4-6 digits)
+    const newPin = Number(newPassword.trim());
+    if (isNaN(newPin) || newPin < 1000 || newPin > 999999) {
+      toast.error('New PIN must be a 4-6 digit number');
+      return;
+    }
+
+    // Validate passwords match
+    if (newPassword !== confirmPassword) {
+      toast.error('New PIN and Confirm PIN do not match');
+      return;
+    }
+
+    if (!restaurantId) {
+      toast.error('Unable to identify restaurant. Please log out and log back in.');
+      return;
+    }
+
+    try {
+      setIsChangingPassword(true);
+      
+      // First, verify current PIN matches
+      const restaurant = await getRestaurantByUsername(restaurantId);
+      if (!restaurant) {
+        toast.error('Restaurant not found');
+        return;
+      }
+
+      const storedPasswordHash = (restaurant as any).password_hash;
+      if (storedPasswordHash === null || storedPasswordHash === undefined) {
+        toast.error('No PIN set for this restaurant. Please contact support.');
+        return;
+      }
+
+      if (Number(storedPasswordHash) !== currentPin) {
+        toast.error('Current PIN is incorrect');
+        return;
+      }
+
+      // Update password
+      await updateRestaurantPassword(restaurantId, newPin);
+      toast.success('PIN updated successfully');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (error: any) {
+      console.error('❌ Error changing password:', error);
+      const errorMessage = error.message || 'Failed to change PIN';
+      toast.error(errorMessage);
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
   const renderContent = () => {
     switch (activeSection) {
       case 'orders':
@@ -1200,22 +1273,59 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
         return (
           <div className="flex-1 p-6">
             <div className="mb-6">
-              <h1 className="text-2xl font-bold mb-4">Change Password</h1>
+              <h1 className="text-2xl font-bold mb-4">Change PIN</h1>
               <Card>
                 <CardContent className="pt-6 space-y-4">
                   <div>
-                    <Label htmlFor="currentPassword">Current Password</Label>
-                    <Input id="currentPassword" type="password" />
+                    <Label htmlFor="currentPassword">Current PIN</Label>
+                    <Input 
+                      id="currentPassword" 
+                      type="password" 
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      placeholder="Enter current PIN (4-6 digits)"
+                      disabled={isChangingPassword}
+                    />
+                    <p className="text-sm text-gray-500 mt-1">Enter your current 4-6 digit PIN</p>
                   </div>
                   <div>
-                    <Label htmlFor="newPassword">New Password</Label>
-                    <Input id="newPassword" type="password" />
+                    <Label htmlFor="newPassword">New PIN</Label>
+                    <Input 
+                      id="newPassword" 
+                      type="password" 
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="Enter new PIN (4-6 digits)"
+                      disabled={isChangingPassword}
+                    />
+                    <p className="text-sm text-gray-500 mt-1">Enter a new 4-6 digit numeric PIN</p>
                   </div>
                   <div>
-                    <Label htmlFor="confirmPassword">Confirm New Password</Label>
-                    <Input id="confirmPassword" type="password" />
+                    <Label htmlFor="confirmPassword">Confirm New PIN</Label>
+                    <Input 
+                      id="confirmPassword" 
+                      type="password" 
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="Confirm new PIN"
+                      disabled={isChangingPassword}
+                    />
+                    <p className="text-sm text-gray-500 mt-1">Re-enter the new PIN to confirm</p>
                   </div>
-                  <Button>Update Password</Button>
+                  <Button 
+                    onClick={handleChangePassword}
+                    disabled={isChangingPassword}
+                    className="bg-black text-white hover:bg-gray-800"
+                  >
+                    {isChangingPassword ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Updating...
+                      </>
+                    ) : (
+                      'Update PIN'
+                    )}
+                  </Button>
                 </CardContent>
               </Card>
             </div>

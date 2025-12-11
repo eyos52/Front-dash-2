@@ -113,8 +113,14 @@ export function LoginPage({ onLogin, onBackToHome }: LoginPageProps) {
 
     if (!credentials.password.trim()) {
       formErrors.push('Password is required');
+    } else if (credentials.role === 'restaurant' || credentials.role === 'staff') {
+      // Restaurant and staff use numeric PINs (4-6 digits)
+      const pin = Number(credentials.password.trim());
+      if (isNaN(pin) || pin < 1000 || pin > 999999) {
+        formErrors.push('PIN must be a 4-6 digit number');
+      }
     } else if (credentials.role !== 'staff' && !validatePassword(credentials.password)) {
-      // Skip password complexity validation for staff (they use numeric PINs)
+      // Admin uses complex passwords
       formErrors.push('Password must contain at least 8 characters with uppercase, lowercase, number, and special character (!@#$%^&*)');
     }
 
@@ -219,10 +225,22 @@ export function LoginPage({ onLogin, onBackToHome }: LoginPageProps) {
           const authInfo = await getRestaurantAuthInfo(credentials.username);
           
           if (authInfo?.restaurant) {
-            // Check password - use stored hash if present, otherwise generated password hash
-            const passwordHashInput = btoa(credentials.password);
-            const isValidPassword = passwordHashInput === authInfo.passwordHash;
-            
+            // Restaurant passwords are stored as numeric PINs in the 'password_hash' column (int8)
+            // Convert entered password to number and compare with password_hash
+            const inputPin = Number(credentials.password.trim());
+            const isValidPassword = !isNaN(inputPin) && 
+              authInfo.passwordHash !== null && 
+              authInfo.passwordHash !== undefined &&
+              Number(authInfo.passwordHash) === inputPin;
+
+            console.log('🔍 Restaurant login attempt:', {
+              username: credentials.username.trim(),
+              inputPin,
+              storedPasswordHash: authInfo.passwordHash,
+              passwordHashType: typeof authInfo.passwordHash,
+              isValid: isValidPassword
+            });
+
             if (isValidPassword) {
               const account = {
                 username: authInfo.restaurant.restaurant_id || credentials.username,
@@ -235,10 +253,26 @@ export function LoginPage({ onLogin, onBackToHome }: LoginPageProps) {
               onLogin('restaurant', account);
               setIsLoading(false);
               return;
+            } else {
+              // Invalid PIN - show clean error message
+              toast.error('Invalid username or PIN');
+              setErrors(['Invalid username or PIN']);
+              setIsLoading(false);
+              return;
             }
+          } else {
+            // Restaurant not found
+            toast.error('Invalid username or PIN');
+            setErrors(['Invalid username or PIN']);
+            setIsLoading(false);
+            return;
           }
         } catch (error: any) {
-          console.log('Database lookup failed for restaurant, trying demo accounts:', error);
+          console.log('Database lookup failed for restaurant:', error);
+          toast.error('Invalid username or PIN');
+          setErrors(['Invalid username or PIN']);
+          setIsLoading(false);
+          return;
         }
       }
 

@@ -151,13 +151,13 @@ export async function getRestaurantByUsername(username: string) {
   return data as Restaurant | null;
 }
 
-// Get restaurant auth info (returns restaurant and a password hash, generating one if missing)
+// Get restaurant auth info (returns restaurant and password_hash as numeric PIN)
 export async function getRestaurantAuthInfo(username: string) {
   const restaurant = await getRestaurantByUsername(username);
   if (!restaurant) return null;
 
-  const passwordHash =
-    (restaurant as any).password_hash || hashPassword(generateRandomPassword(username));
+  // password_hash is now a numeric PIN (int8), not a hash
+  const passwordHash = (restaurant as any).password_hash;
 
   return { restaurant, passwordHash };
 }
@@ -377,6 +377,25 @@ export function hashPassword(password: string): string {
   return btoa(password); // Simple base64 encoding - in production, use bcrypt or similar
 }
 
+// Generate a random numeric PIN (4-6 digits)
+// Similar to staff PIN generation but with variable length
+export function generateRandomPIN(): number {
+  // Randomly choose between 4, 5, or 6 digits
+  const length = Math.floor(Math.random() * 3) + 4; // 4, 5, or 6
+  
+  // Generate PIN based on length
+  if (length === 4) {
+    // 4 digits: 1000 to 9999
+    return Math.floor(1000 + Math.random() * 9000);
+  } else if (length === 5) {
+    // 5 digits: 10000 to 99999
+    return Math.floor(10000 + Math.random() * 90000);
+  } else {
+    // 6 digits: 100000 to 999999
+    return Math.floor(100000 + Math.random() * 900000);
+  }
+}
+
 // Create restaurant registration request - stores menu items and operating hours as JSON in note field
 export async function createRestaurantRegistration(registration: {
   restaurant_name: string;
@@ -526,30 +545,39 @@ async function createRestaurantFromRequest(request: any): Promise<{ username: st
   // Check if restaurant already exists
   const { data: existingRestaurant } = await supabase
     .from('restaurants')
-    .select('restaurant_id')
+    .select('restaurant_id, password_hash')
     .eq('restaurant_id', restaurantId)
-    .single();
+    .maybeSingle();
 
+  // Generate PIN only if password_hash is NULL (first approval)
+  let generatedPIN: number | null = null;
+  let passwordHash: number | null = null;
+  
   if (existingRestaurant) {
-    console.log(`Restaurant with ID ${restaurantId} already exists, skipping creation`);
-    // Return existing restaurant credentials
-    return {
-      username: restaurantId,
-      password: generateRandomPassword(restaurantId),
-      restaurantName: restaurantName
-    };
+    console.log(`Restaurant with ID ${restaurantId} already exists`);
+    // If password_hash is already set, don't overwrite it
+    if (existingRestaurant.password_hash !== null && existingRestaurant.password_hash !== undefined) {
+      console.log('Restaurant already has a PIN, not generating a new one');
+      // Return existing restaurant (no password returned since we don't store plain PIN)
+      return {
+        username: restaurantId,
+        password: '', // Don't return password if already set
+        restaurantName: restaurantName
+      };
+    }
+    // If password_hash is NULL, generate a new PIN
+    generatedPIN = generateRandomPIN();
+    passwordHash = generatedPIN;
+  } else {
+    // New restaurant - generate PIN
+    generatedPIN = generateRandomPIN();
+    passwordHash = generatedPIN;
   }
 
-  // Generate random password for the restaurant based on username
-  const randomPassword = generateRandomPassword(restaurantId); // Use username (restaurantId) for password generation
-  const passwordHash = hashPassword(randomPassword);
-
-  // Create restaurant entry with all required fields
-  const restaurantData: any = {
-    restaurant_id: restaurantId,
+  // Prepare update data (only set password_hash if we generated a new PIN)
+  const updateData: any = {
     registration_status: 'approved',
     is_active: true,
-    // withdrawal_status is now nullable, so we can omit it or set to null
     name: restaurantName,
     contact_name: request.proposed_contact_name || 'Restaurant Owner',
     contact_email: request.proposed_contact_email || '',
@@ -559,47 +587,79 @@ async function createRestaurantFromRequest(request: any): Promise<{ username: st
     city: noteData.city || null,
     state: noteData.state || null,
     zip: noteData.zip || null,
-    operating_hours: noteData.operatingHours || null,
-    // Store credentials for login
-    username: restaurantId, // Username is the restaurant_id
-    password_hash: passwordHash
-    // Note: We don't store plain_password in the database for security
-    // The password can be regenerated from the username when needed
+    operating_hours: noteData.operatingHours || null
   };
 
-  const { error: restaurantError } = await supabase
-    .from('restaurants')
-    .insert([restaurantData]);
+  // Only set password_hash if we generated a new PIN (i.e., it was NULL before)
+  if (passwordHash !== null) {
+    updateData.password_hash = passwordHash;
+  }
+
+  let restaurantError: any = null;
+
+  if (existingRestaurant) {
+    // Update existing restaurant
+    const { error: updateError } = await supabase
+      .from('restaurants')
+      .update(updateData)
+      .eq('restaurant_id', restaurantId);
+    
+    restaurantError = updateError;
+    if (!restaurantError) {
+      console.log('Restaurant updated successfully:', restaurantId);
+    }
+  } else {
+    // Insert new restaurant
+    const restaurantData: any = {
+      ...updateData,
+      restaurant_id: restaurantId
+    };
+
+    const { error: insertError } = await supabase
+      .from('restaurants')
+      .insert([restaurantData]);
+
+    restaurantError = insertError;
+    if (!restaurantError) {
+      console.log('Restaurant created successfully:', restaurantId);
+    }
+  }
 
   if (restaurantError) {
-    console.error('Error creating restaurant:', restaurantError);
-    // Check if it's a duplicate key error (restaurant already exists)
-    if (restaurantError.code === '23505' || restaurantError.message.includes('duplicate')) {
-      console.warn('Restaurant with this ID already exists, skipping creation');
-    } else {
-      // If columns don't exist, try without them
-      if (restaurantError.message.includes('column') && (restaurantError.message.includes('username') || restaurantError.message.includes('password_hash'))) {
-        console.warn('Username/password_hash columns may not exist, trying without them');
-        delete restaurantData.username;
-        delete restaurantData.password_hash;
+    console.error('Error saving restaurant:', restaurantError);
+    // If columns don't exist, try without password_hash
+    if (restaurantError.message.includes('column') && restaurantError.message.includes('password_hash')) {
+      console.warn('password_hash column may not exist, trying without it');
+      delete updateData.password_hash;
+      if (existingRestaurant) {
+        const { error: retryError } = await supabase
+          .from('restaurants')
+          .update(updateData)
+          .eq('restaurant_id', restaurantId);
+        if (retryError) {
+          throw new Error(`Failed to save restaurant: ${retryError.message}`);
+        }
+      } else {
+        const restaurantData: any = {
+          ...updateData,
+          restaurant_id: restaurantId
+        };
         const { error: retryError } = await supabase
           .from('restaurants')
           .insert([restaurantData]);
         if (retryError) {
-          throw new Error(`Failed to create restaurant: ${retryError.message}`);
+          throw new Error(`Failed to save restaurant: ${retryError.message}`);
         }
-      } else {
-        throw new Error(`Failed to create restaurant: ${restaurantError.message}`);
       }
+    } else {
+      throw new Error(`Failed to save restaurant: ${restaurantError.message}`);
     }
-  } else {
-    console.log('Restaurant created successfully:', restaurantData.restaurant_id);
   }
   
-  // Return the generated credentials
+  // Return the generated credentials (PIN as string for display)
   return {
     username: restaurantId,
-    password: randomPassword,
+    password: generatedPIN ? generatedPIN.toString() : '',
     restaurantName: restaurantName
   };
 }
@@ -1506,6 +1566,49 @@ export async function getStaffByUsername(username: string) {
   };
   
   return mapped as StaffMember;
+}
+
+// Update restaurant password (PIN) - stores numeric PIN in password_hash field
+export async function updateRestaurantPassword(restaurantId: string, newPIN: number) {
+  console.log('🔵 updateRestaurantPassword() - Updating password for restaurant_id:', restaurantId, 'PIN:', newPIN);
+  
+  if (!restaurantId || restaurantId.trim() === '') {
+    throw new Error('Restaurant ID is required to update password');
+  }
+
+  // Validate PIN is numeric and 4-6 digits
+  if (isNaN(newPIN) || newPIN < 1000 || newPIN > 999999) {
+    throw new Error('PIN must be a 4-6 digit number');
+  }
+
+  // Update the password_hash field (numeric PIN, like staffuser.pass)
+  const { data, error } = await supabase
+    .from('restaurants')
+    .update({ 
+      password_hash: newPIN // Store numeric PIN in password_hash field
+    })
+    .eq('restaurant_id', restaurantId.trim())
+    .select();
+
+  if (error) {
+    console.error('❌ Error updating restaurant password:', error);
+    console.error('Error details:', {
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      code: error.code,
+      restaurantId: restaurantId
+    });
+    throw new Error(`Failed to update password: ${error.message}`);
+  }
+
+  if (!data || data.length === 0) {
+    console.error('❌ No restaurant found with restaurant_id:', restaurantId);
+    throw new Error(`No restaurant found with restaurant_id: ${restaurantId}`);
+  }
+
+  console.log('✅ Password updated successfully for restaurant_id:', restaurantId);
+  return data[0] as Restaurant;
 }
 
 // Update staff password (PIN) - stores numeric PIN in pass field only
