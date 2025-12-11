@@ -124,8 +124,11 @@ export interface StaffMember {
   role: 'support' | 'manager' | 'admin';
   date_added: string;
   password_hash?: string;
+  pass?: number | null; // Numeric PIN stored in staffuser.pass (int8)
   first_time_login?: boolean;
   email?: string;
+  firstname?: string;
+  lastname?: string;
 }
 
 export interface Driver {

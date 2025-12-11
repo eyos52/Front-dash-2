@@ -1,6 +1,50 @@
 import { supabase, Restaurant, Order, OrderItem, RestaurantRegistration, StaffMember, Driver, WithdrawalRequest, MenuItem } from '../supabase';
 import { WeeklyHours, serializeOperatingHours } from '../utils/operatingHours';
 
+// ========== HELPER FUNCTIONS FOR ORDER STATUS AND DRIVER VALIDATION ==========
+
+/**
+ * Normalize order status - converts "confirmed" (lowercase) to "Pending"
+ * Standard statuses: "Pending", "Assigned", "Completed"
+ */
+export function normalizeOrderStatus(status: string | null | undefined): string {
+  if (!status) return 'Pending';
+  const normalized = String(status).trim();
+  const lower = normalized.toLowerCase();
+  
+  // Normalize old "confirmed" status to "Pending"
+  if (lower === 'confirmed') return 'Pending';
+  
+  // Return standard statuses as-is
+  if (['Pending', 'Assigned', 'Completed'].includes(normalized)) {
+    return normalized;
+  }
+  
+  // Default to Pending for unknown statuses
+  return 'Pending';
+}
+
+/**
+ * Check if a driver is active and available for assignment
+ * Returns true if employment_status = 'active' AND is_available = true
+ * Treats NULL employment_status as inactive
+ */
+export function isDriverActiveAndAvailable(driver: Driver | any): boolean {
+  if (!driver) return false;
+  
+  // Check employment_status (can be text 'active' or boolean true)
+  // NULL or undefined employment_status means inactive
+  const employmentStatus = driver.employment_status;
+  const isActive = employmentStatus === 'active' || employmentStatus === true || employmentStatus === 'Active';
+  
+  // Check is_available (can be boolean or string)
+  // Must be explicitly true
+  const isAvailable = driver.is_available === true || driver.is_available === 'true' || driver.is_available === 1;
+  
+  // Both conditions must be true
+  return isActive && isAvailable;
+}
+
 // Generate a unique, human-friendly order_id (e.g., FD-20250101-ABC123)
 async function generateUniqueOrderId(): Promise<string> {
   const ts = new Date();
@@ -333,95 +377,35 @@ export function hashPassword(password: string): string {
   return btoa(password); // Simple base64 encoding - in production, use bcrypt or similar
 }
 
-export async function createRestaurantRegistration(registration: Omit<RestaurantRegistration, 'id' | 'submission_date' | 'status' | 'decision_date' | 'reviewed_by'> & { password?: string }) {
+// Create restaurant registration request - stores menu items and operating hours as JSON in note field
+export async function createRestaurantRegistration(registration: {
+  restaurant_name: string;
+  owner_first_name: string;
+  owner_last_name: string;
+  email: string;
+  phone: string;
+  address: string;
+  note: string; // JSON string containing menuItems and operatingHours
+}) {
   // Generate random ID for the request itself
   const randomId = `REQ-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
-  
-  // Generate unique random restaurant_id
-  const randomRestaurantId = await generateUniqueRestaurantId();
   
   // Combine owner first and last name for contact_name
   const contactName = `${registration.owner_first_name} ${registration.owner_last_name}`.trim();
   
-  // Generate username from restaurant name
-  const baseUsername = generateUsernameFromRestaurantName(registration.restaurant_name);
-  
-  // Check if username already exists in restaurants or requests
-  let username = baseUsername;
-  let usernameCounter = 1;
-  while (true) {
-    const { data: existingRestaurant } = await supabase
-      .from('restaurants')
-      .select('restaurant_id')
-      .eq('restaurant_id', username)
-      .maybeSingle();
-    
-    const { data: existingRequest } = await supabase
-      .from('requests')
-      .select('id')
-      .eq('kind', 'registration')
-      .eq('restaurant_id', username)
-      .maybeSingle();
-    
-    if (!existingRestaurant && !existingRequest) {
-      break; // Username is available
-    }
-    
-    username = `${baseUsername}${usernameCounter}`;
-    usernameCounter++;
-    
-    // Safety check to prevent infinite loop
-    if (usernameCounter > 1000) {
-      username = `${baseUsername}${Date.now()}`;
-      break;
-    }
-  }
-  
-  // Hash password if provided
-  const passwordHash = registration.password ? hashPassword(registration.password) : null;
-  
-  // Build note with additional information (cuisine type, description, hours, credentials)
-  // Store structured data in note for parsing: "Cuisine: X | Description: Y | Hours: HH:MM-HH:MM | City: X | State: Y | Zip: Z | Username: X | PasswordHash: Y"
-  const noteParts = [];
-  if (registration.cuisine_type) {
-    noteParts.push(`Cuisine: ${registration.cuisine_type}`);
-  }
-  if (registration.description) {
-    noteParts.push(`Description: ${registration.description}`);
-  }
-  if (registration.opening_time && registration.closing_time) {
-    noteParts.push(`Hours: ${registration.opening_time}-${registration.closing_time}`);
-  }
-  // Store city, state, zip in note for parsing
-  noteParts.push(`City: ${registration.city}`);
-  noteParts.push(`State: ${registration.state}`);
-  noteParts.push(`Zip: ${registration.zip_code}`);
-  // Store credentials in note
-  if (username) {
-    noteParts.push(`Username: ${username}`);
-  }
-  if (passwordHash) {
-    noteParts.push(`PasswordHash: ${passwordHash}`);
-  }
-  const note = noteParts.join(' | ').trim();
-  
-  // Store full address in proposed_address (street address only, city/state/zip in note)
-  const fullAddress = registration.address.trim();
-  
-  // Store registration data in the requests table columns
+  // Store registration data in the requests table with kind = 'registration'
   const { data, error } = await supabase
     .from('requests')
     .insert([{
       id: randomId,
-      kind: 'registration',
-      restaurant_id: username, // Use username as restaurant_id for now
+      kind: 'registration', // Use 'registration' to match database constraint
       status: 'pending',
       proposed_name: registration.restaurant_name,
       proposed_contact_name: contactName,
       proposed_contact_email: registration.email,
       proposed_phone: registration.phone,
-      proposed_address: fullAddress,
-      note: note || null
+      proposed_address: registration.address,
+      note: registration.note || null // JSON string with menuItems and operatingHours
     }])
     .select()
     .single();
@@ -433,6 +417,7 @@ export async function createRestaurantRegistration(registration: Omit<Restaurant
   return data as any;
 }
 
+// Get restaurant registration requests - filters by kind = 'registration'
 export async function getRestaurantRegistrations(status?: 'pending' | 'approved' | 'rejected') {
   let query = supabase.from('requests').select('*').eq('kind', 'registration');
   
@@ -441,7 +426,7 @@ export async function getRestaurantRegistrations(status?: 'pending' | 'approved'
     query = query.eq('status', status);
   }
   
-  const { data, error } = await query.order('id', { ascending: false });
+  const { data, error } = await query.order('created_at', { ascending: false });
   
   if (error) {
     console.error('Error fetching registration requests:', error);
@@ -619,6 +604,33 @@ async function createRestaurantFromRequest(request: any): Promise<{ username: st
   };
 }
 
+// Parse note JSON to check if menu items and operating hours are present
+function parseRequestNote(note: string | null): { menuItems?: any[]; operatingHours?: any } | null {
+  if (!note) return null;
+  try {
+    return JSON.parse(note);
+  } catch {
+    return null;
+  }
+}
+
+// Check if request has menu items and operating hours
+function hasMenuItemsAndHours(note: string | null): { hasMenuItems: boolean; hasOperatingHours: boolean } {
+  const parsed = parseRequestNote(note);
+  if (!parsed) {
+    return { hasMenuItems: false, hasOperatingHours: false };
+  }
+  
+  const hasMenuItems = Array.isArray(parsed.menuItems) && parsed.menuItems.length > 0;
+  const hasOperatingHours = !!(
+    parsed.operatingHours?.monFri ||
+    parsed.operatingHours?.sat ||
+    parsed.operatingHours?.sun
+  );
+  
+  return { hasMenuItems, hasOperatingHours };
+}
+
 export async function updateRestaurantRegistrationStatus(id: string, status: 'approved' | 'rejected', reviewerId: string): Promise<{ username?: string; password?: string; restaurantName?: string } | null> {
   // First, get the request to retrieve registration data
   const { data: request, error: fetchError } = await supabase
@@ -633,9 +645,19 @@ export async function updateRestaurantRegistrationStatus(id: string, status: 'ap
     throw fetchError;
   }
 
-  // If approving, create a restaurant entry and get credentials
-  let credentials = null;
+  // If approving, validate that menu items and operating hours are present
+  let credentials: { username: string; password: string; restaurantName: string } | null = null;
   if (status === 'approved' && request) {
+    const { hasMenuItems, hasOperatingHours } = hasMenuItemsAndHours(request.note);
+    
+    if (!hasMenuItems || !hasOperatingHours) {
+      const missing: string[] = [];
+      if (!hasMenuItems) missing.push('menu items');
+      if (!hasOperatingHours) missing.push('operating hours');
+      throw new Error(`This request is missing ${missing.join(' and/or ')}. Please reject it and ask the restaurant to resubmit with complete information.`);
+    }
+    
+    // If validation passes, create restaurant entry and get credentials
     credentials = await createRestaurantFromRequest(request);
   }
 
@@ -896,253 +918,60 @@ export async function confirmOrder(orderId: string) {
 }
 
 // Get pending orders (order queue) - for staff interface
-// Includes both "pending" and "confirmed" orders (confirmed orders from restaurant portal)
-// Get pending orders for staff queue
-// Returns orders that are confirmed/queued but not yet assigned to a driver
+// Returns orders with status 'Pending' or 'Queued' (typically driver_id = NULL)
 export async function getPendingOrders() {
-  console.log('🔵 getPendingOrders() - Fetching orders for staff queue...');
+  console.log('🔵 getPendingOrders() - Fetching orders from Supabase...');
   
-  // First, let's check what orders exist in the database (for debugging)
-  const { data: allOrdersDebug, error: debugError } = await supabase
-    .from('orders')
-    .select('order_id, status, driver_id, placed_at, restaurant_id')
-    .order('placed_at', { ascending: false })
-    .limit(20);
-  
-  if (!debugError && allOrdersDebug) {
-    console.log('🔍 Recent orders in database:', allOrdersDebug.length);
-    allOrdersDebug.forEach((order: any) => {
-      const statusLower = String(order.status || '').toLowerCase().trim();
-      const isConfirmed = statusLower === 'confirmed';
-      const isPending = statusLower === 'pending';
-      const hasNoDriver = !order.driver_id;
-      const shouldBeInQueue = isConfirmed && hasNoDriver;
-      console.log('  -', order.order_id, '| Status:', order.status, '| Driver:', order.driver_id || 'NULL', '| Should be in queue:', shouldBeInQueue);
-    });
-  } else if (debugError) {
-    console.error('❌ Error fetching debug orders:', debugError);
-  }
-  
-  // Specifically check for Confirmed orders (any case variation)
-  const { data: confirmedOrdersCheck, error: confirmedError } = await supabase
-    .from('orders')
-    .select('order_id, status, driver_id')
-    .or('status.eq.Confirmed,status.eq.confirmed,status.ilike.confirmed');
-  
-  if (!confirmedError && confirmedOrdersCheck) {
-    const confirmedWithoutDriver = confirmedOrdersCheck.filter((o: any) => !o.driver_id);
-    console.log('🔍 Total Confirmed orders in database:', confirmedOrdersCheck.length);
-    console.log('🔍 Confirmed orders WITHOUT driver (should be in queue):', confirmedWithoutDriver.length);
-    if (confirmedWithoutDriver.length > 0) {
-      console.log('🔍 Confirmed order IDs (no driver):', confirmedWithoutDriver.map((o: any) => o.order_id));
-    }
-  }
-  
-  // Fetch all orders without driver_id - this is the key filter
-  // First, let's try a simple query to see what columns exist
-  const { data: testQuery, error: testError } = await supabase
-    .from('orders')
-    .select('order_id, status, driver_id, restaurant_id, placed_at, total')
-    .limit(5);
-  
-  if (!testError && testQuery) {
-    console.log('🔍 Test query successful. Sample order columns:', testQuery[0] ? Object.keys(testQuery[0]) : 'No orders');
-    console.log('🔍 Sample order data:', testQuery[0]);
-  } else if (testError) {
-    console.error('❌ Test query failed:', testError);
-    console.error('❌ This might indicate a column name mismatch');
-  }
-  
-  // Now fetch all orders without driver_id
+  // Fetch all orders from Supabase
   const { data: allOrders, error: fetchError } = await supabase
     .from('orders')
-    .select(`
-      *,
-      order_items (
-        order_item_id,
-        order_id,
-        menu_item_id,
-        item_name_snapshot,
-        unit_price_snapshot,
-        quantity,
-        menu_items (
-          menu_item_id,
-          name,
-          price,
-          description
-        )
-      )
-    `)
-    .is('driver_id', null) // Only orders without driver assigned
-    .order('placed_at', { ascending: true, nullsFirst: false });
-  
+    .select('*')
+    .order('placed_at', { ascending: false });
+
   if (fetchError) {
     console.error('❌ Error fetching orders:', fetchError);
-    console.error('❌ Error details:', {
-      message: fetchError.message,
-      code: fetchError.code,
-      details: fetchError.details,
-      hint: fetchError.hint
-    });
     throw fetchError;
   }
-  
-  console.log('📊 Total orders without driver:', allOrders?.length || 0);
-  
-  // Log what columns we actually got back
+
+  console.log('📊 Raw orders from Supabase:', allOrders?.length || 0);
   if (allOrders && allOrders.length > 0) {
-    console.log('📋 Columns in first order:', Object.keys(allOrders[0]));
-    console.log('📋 First order sample:', {
-      order_id: allOrders[0].order_id,
-      status: allOrders[0].status,
-      driver_id: allOrders[0].driver_id,
-      restaurant_id: allOrders[0].restaurant_id,
-      placed_at: allOrders[0].placed_at
-    });
+    console.log('📋 All order IDs:', allOrders.map((o: any) => o.order_id));
+    console.log('📋 All order statuses:', [...new Set(allOrders.map((o: any) => o.status))]);
   }
-  
-  // Log each order's status for debugging BEFORE filtering
-  if (allOrders && allOrders.length > 0) {
-    console.log('📋 Orders without driver and their statuses:');
-    allOrders.forEach((order: any) => {
-      const statusStr = String(order.status || 'NULL');
-      const statusLower = statusStr.toLowerCase().trim();
-      const isPending = statusLower === 'pending';
-      const isConfirmed = statusLower === 'confirmed';
-      console.log('  -', order.order_id, '| Status:', statusStr, '| Lowercase:', statusLower, '| IsPending:', isPending, '| IsConfirmed:', isConfirmed);
-    });
-  }
-  
-  // Filter by status in JavaScript (case-insensitive)
-  // ONLY include orders with status 'Confirmed' - exclude 'Pending' and all other statuses
+
+  // Filter orders: status = 'Pending' (normalized) AND driver_id IS NULL
+  // Normalize "confirmed" to "Pending" for filtering
   const pendingOrders = (allOrders || []).filter((order: any) => {
-    if (!order.status) {
-      console.log('⚠️ Order', order.order_id, 'has no status - excluding');
-      return false;
-    }
-    
-    // Normalize status: trim whitespace and convert to lowercase for comparison
-    const status = String(order.status).toLowerCase().trim();
-    
-    // ONLY include orders with status 'confirmed' (case-insensitive)
-    // This handles: 'Confirmed', 'confirmed', 'CONFIRMED', etc.
-    // Exclude 'Pending' and all other statuses
-    const isValid = status === 'confirmed';
-    
-    if (isValid) {
-      console.log('✅ Order', order.order_id, 'with status', order.status, '(normalized:', status, ') INCLUDED in queue');
-    } else {
-      console.log('⚠️ Order', order.order_id, 'has status', order.status, '(normalized:', status, ') - NOT included (only Confirmed allowed, not Pending)');
-    }
-    
-    return isValid;
+    const normalizedStatus = normalizeOrderStatus(order.status);
+    const hasNoDriver = !order.driver_id;
+    return normalizedStatus === 'Pending' && hasNoDriver;
   });
-  
-  console.log('✅ Found', pendingOrders.length, 'orders in queue (out of', allOrders?.length || 0, 'total without driver)');
-  
-  // Debug: Log all unique statuses found
-  if (allOrders && allOrders.length > 0) {
-    const uniqueStatuses = [...new Set(allOrders.map((o: any) => o.status))];
-    console.log('🔍 All statuses found (without driver):', uniqueStatuses);
-    console.log('🔍 Status counts:', uniqueStatuses.map(s => ({
-      status: s,
-      count: allOrders.filter((o: any) => o.status === s).length,
-      normalized: String(s).toLowerCase().trim(),
-      isIncluded: String(s).toLowerCase().trim() === 'confirmed'
-    })));
-    
-    // Specifically check for Confirmed orders
-    const confirmedOrders = allOrders.filter((o: any) => 
-      String(o.status).toLowerCase().trim() === 'confirmed'
-    );
-    console.log('🔍 Confirmed orders found (without driver):', confirmedOrders.length);
-    if (confirmedOrders.length > 0) {
-      console.log('🔍 Confirmed order IDs:', confirmedOrders.map((o: any) => o.order_id));
-    }
-  }
-  
-  if (pendingOrders.length > 0) {
-    console.log('✅ Sample order:', {
-      order_id: pendingOrders[0].order_id,
-      status: pendingOrders[0].status,
-      restaurant_id: pendingOrders[0].restaurant_id,
-      driver_id: pendingOrders[0].driver_id,
-      placed_at: pendingOrders[0].placed_at,
-      total: pendingOrders[0].total
-    });
-  } else {
-    console.warn('⚠️ No orders in queue!');
-    if (allOrders && allOrders.length > 0) {
-      console.warn('⚠️ Found', allOrders.length, 'orders without driver, but none match confirmed status');
-      console.warn('⚠️ Orders have statuses:', [...new Set(allOrders.map((o: any) => o.status))]);
-      
-      // Check if there are any Confirmed orders that should be included
-      const confirmedCount = allOrders.filter((o: any) => 
-        String(o.status).toLowerCase().trim() === 'confirmed'
-      ).length;
-      if (confirmedCount > 0) {
-        console.error('❌ ERROR: Found', confirmedCount, 'Confirmed orders but they are not in the queue!');
-        console.error('❌ This indicates a bug in the filter logic');
-      }
-    } else {
-      console.warn('⚠️ No orders found in database without driver_id');
-    }
-  }
-  
+
+  console.log('✅ Order Queue: Found', pendingOrders.length, 'orders with status Pending or Queued');
+  console.log('📋 Order Queue IDs:', pendingOrders.map((o: any) => o.order_id));
+
   // Fetch restaurant details for each order
   const ordersWithRestaurants = await Promise.all(
     pendingOrders.map(async (order: any) => {
       if (order.restaurant_id) {
         try {
-          console.log(`🔍 Fetching restaurant for order ${order.order_id}, restaurant_id: ${order.restaurant_id}`);
-          
-          // Try fetching with restaurant_id first
           let { data: restaurant, error: restError } = await supabase
             .from('restaurants')
-            .select('*') // Select all columns to see what we get
+            .select('*')
             .eq('restaurant_id', order.restaurant_id)
-            .single();
+            .maybeSingle();
           
-          // If that fails, try with id column as fallback
-          if (restError && restError.code === 'PGRST116') {
-            console.log(`⚠️ No restaurant found with restaurant_id, trying id column...`);
-            const { data: restaurantById, error: idError } = await supabase
+          if (restError || !restaurant) {
+            // Try with id column as fallback
+            const { data: restaurantById } = await supabase
               .from('restaurants')
               .select('*')
               .eq('id', order.restaurant_id)
-              .single();
-            
-            if (!idError && restaurantById) {
-              restaurant = restaurantById;
-              restError = null;
-            } else {
-              restError = idError;
-            }
+              .maybeSingle();
+            restaurant = restaurantById || null;
           }
           
-          if (restError) {
-            console.error(`❌ Error fetching restaurant ${order.restaurant_id} for order ${order.order_id}:`, restError);
-            console.error(`❌ Error details:`, {
-              message: restError.message,
-              code: restError.code,
-              details: restError.details,
-              hint: restError.hint
-            });
-            // Log what columns exist in restaurants table
-            const { data: sampleRestaurant } = await supabase
-              .from('restaurants')
-              .select('*')
-              .limit(1);
-            if (sampleRestaurant && sampleRestaurant.length > 0) {
-              console.log(`📋 Sample restaurant columns:`, Object.keys(sampleRestaurant[0]));
-              console.log(`📋 Sample restaurant data:`, sampleRestaurant[0]);
-            }
-            order.restaurants = null;
-          } else if (restaurant) {
-            console.log(`✅ Found restaurant for order ${order.order_id}:`, restaurant);
-            console.log(`✅ Restaurant name:`, restaurant.name || restaurant.Name || 'NO NAME COLUMN FOUND');
-            console.log(`✅ Restaurant columns:`, Object.keys(restaurant));
-            // Map restaurant data - handle different possible column names
+          if (restaurant) {
             order.restaurants = {
               restaurant_id: restaurant.restaurant_id || restaurant.id,
               name: restaurant.name || restaurant.Name || restaurant.restaurant_name || 'Unknown',
@@ -1151,7 +980,6 @@ export async function getPendingOrders() {
               state: restaurant.state || restaurant.State
             };
           } else {
-            console.warn(`⚠️ No restaurant found with restaurant_id: ${order.restaurant_id} for order ${order.order_id}`);
             order.restaurants = null;
           }
         } catch (err) {
@@ -1159,82 +987,53 @@ export async function getPendingOrders() {
           order.restaurants = null;
         }
       } else {
-        console.warn(`⚠️ Order ${order.order_id} has no restaurant_id`);
         order.restaurants = null;
       }
       return order;
     })
   );
   
-  console.log('✅ Returning', ordersWithRestaurants.length, 'orders with restaurant details');
-  console.log('✅ Order IDs being returned:', ordersWithRestaurants.map((o: any) => o.order_id));
-  console.log('✅ Restaurant names:', ordersWithRestaurants.map((o: any) => ({
-    order_id: o.order_id,
-    restaurant_id: o.restaurant_id,
-    restaurant_name: o.restaurants?.name || 'NULL'
-  })));
-  
-  // CRITICAL: Make sure we're actually returning the orders, not an empty array
-  if (ordersWithRestaurants.length === 0 && pendingOrders.length > 0) {
-    console.error('❌ ERROR: pendingOrders has', pendingOrders.length, 'orders but ordersWithRestaurants is empty!');
-    // Return pendingOrders even if restaurant fetch failed
-    return pendingOrders;
-  }
-  
   return ordersWithRestaurants;
 }
 
-// Get orders assigned to a staff member with Active status (driver assigned)
+// Get active orders - orders with status 'Assigned' or 'confirmed' (driver assigned but not completed)
 export async function getStaffActiveOrders(staffId: string) {
-  console.log('🔵 getStaffActiveOrders() - Fetching active orders for staff:', staffId);
+  console.log('🔵 getStaffActiveOrders() - Fetching active orders from Supabase...');
   
-  // First, let's check what active orders exist in the database (for debugging)
-  const { data: allActiveDebug, error: debugError } = await supabase
+  // Fetch all orders from Supabase
+  const { data: allOrders, error: fetchError } = await supabase
     .from('orders')
-    .select('order_id, status, driver_id')
-    .ilike('status', 'active') // Case-insensitive match
-    .order('updated_at', { ascending: false });
+    .select('*')
+    .order('placed_at', { ascending: false });
 
-  if (!debugError && allActiveDebug) {
-    console.log('🔍 All Active orders in database:', allActiveDebug.length);
-    allActiveDebug.forEach((order: any) => {
-      console.log('  -', order.order_id, '| Status:', order.status, '| Driver:', order.driver_id || 'NULL');
-    });
+  if (fetchError) {
+    console.error('❌ Error fetching orders:', fetchError);
+    throw fetchError;
   }
-  
-  // Fetch all active orders (no staff_id filtering needed)
-  const { data, error } = await supabase
-    .from('orders')
-    .select(`
-      *,
-      order_items (*)
-    `)
-    .ilike('status', 'active') // Case-insensitive match for 'Active' status
-    .order('updated_at', { ascending: false });
 
-  if (error) {
-    console.error('❌ Error fetching active orders:', error);
-    throw error;
-  }
+  console.log('📊 Raw orders from Supabase:', allOrders?.length || 0);
+
+  // Filter orders: status = 'Assigned' AND driver_id IS NOT NULL
+  const activeOrders = (allOrders || []).filter((order: any) => {
+    const normalizedStatus = normalizeOrderStatus(order.status);
+    const hasDriver = !!order.driver_id;
+    return normalizedStatus === 'Assigned' && hasDriver;
+  });
+
+  console.log('✅ Active Orders: Found', activeOrders.length, 'orders with status Assigned or confirmed');
+  console.log('📋 Active Order IDs:', activeOrders.map((o: any) => o.order_id));
   
-  console.log('✅ Found', data?.length || 0, 'active orders');
-  
-  if (data && data.length > 0) {
-    console.log('📋 Active order IDs:', data.map((o: any) => o.order_id));
-    console.log('📋 Active order statuses:', [...new Set(data.map((o: any) => o.status))]);
-  }
-  
-  // Fetch restaurant details separately (like in getPendingOrders)
+  // Fetch restaurant and driver details
   const ordersWithRestaurants = await Promise.all(
-    (data || []).map(async (order: any) => {
-      // Attach driver name (even if driver is not currently available)
+    activeOrders.map(async (order: any) => {
+      // Attach driver name if driver_id exists
       if (order.driver_id) {
         try {
           const { data: driver, error: driverError } = await supabase
             .from('drivers')
             .select('driver_id, full_name')
             .eq('driver_id', order.driver_id)
-            .single();
+            .maybeSingle();
           if (!driverError && driver) {
             order.driver_name = driver.full_name || driver.driver_id;
           }
@@ -1245,7 +1044,6 @@ export async function getStaffActiveOrders(staffId: string) {
 
       if (order.restaurant_id) {
         try {
-          console.log(`🔍 Fetching restaurant for active order ${order.order_id}, restaurant_id: ${order.restaurant_id}`);
           
           // Try fetching with restaurant_id first
           let { data: restaurant, error: restError } = await supabase
@@ -1303,84 +1101,86 @@ export async function getStaffActiveOrders(staffId: string) {
 }
 
 // Get delivered orders for a staff member (today's deliveries)
+// Get completed orders (order history) - orders with status 'Completed' delivered today
 export async function getStaffDeliveredOrders(staffId: string) {
-  console.log('🔵 getStaffDeliveredOrders() - Fetching delivered orders for staff:', staffId);
+  console.log('🔵 getStaffDeliveredOrders() - Fetching completed orders from Supabase...');
   
+  // Fetch all orders from Supabase
+  const { data: allOrders, error: fetchError } = await supabase
+    .from('orders')
+    .select('*')
+    .order('placed_at', { ascending: false });
+
+  if (fetchError) {
+    console.error('❌ Error fetching orders:', fetchError);
+    throw fetchError;
+  }
+
+  console.log('📊 Raw orders from Supabase:', allOrders?.length || 0);
+
+  // Filter orders: status = 'Completed' (normalized)
+  const completedOrders = (allOrders || []).filter((order: any) => {
+    const normalizedStatus = normalizeOrderStatus(order.status);
+    return normalizedStatus === 'Completed';
+  });
+
+  console.log('📊 Completed orders (all time):', completedOrders.length);
+
+  // Filter to today's date (compare just the date part of delivered_at)
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const todayStart = today.toISOString();
-  
-  // Fetch orders first (without restaurant join to avoid column errors)
-  const { data, error } = await supabase
-    .from('orders')
-    .select(`
-      *,
-      order_items (*)
-    `)
-    .eq('status', 'Delivered')
-    .gte('delivered_at', todayStart) // Only today's deliveries
-    .order('delivered_at', { ascending: false });
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStart = tomorrow.toISOString();
 
-  if (error) {
-    console.error('❌ Error fetching delivered orders:', error);
-    throw error;
-  }
+  const todayCompletedOrders = completedOrders.filter((order: any) => {
+    if (!order.delivered_at) return false;
+    const deliveredDate = new Date(order.delivered_at);
+    return deliveredDate >= today && deliveredDate < tomorrow;
+  });
+
+  console.log('✅ Order History: Found', todayCompletedOrders.length, 'orders with status Completed delivered today');
+  console.log('📋 Order History IDs:', todayCompletedOrders.map((o: any) => o.order_id));
   
-  console.log('✅ Found', data?.length || 0, 'delivered orders today for staff');
-  
-  // Fetch restaurant details separately (like in getPendingOrders)
+  // Fetch restaurant details for each order
   const ordersWithRestaurants = await Promise.all(
-    (data || []).map(async (order: any) => {
-      // Attach driver name (even if driver is not currently available)
+    todayCompletedOrders.map(async (order: any) => {
+      // Attach driver name if driver_id exists
       if (order.driver_id) {
         try {
           const { data: driver, error: driverError } = await supabase
             .from('drivers')
             .select('driver_id, full_name')
             .eq('driver_id', order.driver_id)
-            .single();
+            .maybeSingle();
           if (!driverError && driver) {
             order.driver_name = driver.full_name || driver.driver_id;
           }
         } catch (err) {
-          console.error(`❌ Exception fetching driver for delivered order ${order.order_id}:`, err);
+          console.error(`❌ Exception fetching driver for order ${order.order_id}:`, err);
         }
       }
 
       if (order.restaurant_id) {
         try {
-          console.log(`🔍 Fetching restaurant for delivered order ${order.order_id}, restaurant_id: ${order.restaurant_id}`);
-          
-          // Try fetching with restaurant_id first
           let { data: restaurant, error: restError } = await supabase
             .from('restaurants')
-            .select('*') // Select all columns to see what we get
+            .select('*')
             .eq('restaurant_id', order.restaurant_id)
-            .single();
+            .maybeSingle();
           
-          // If that fails, try with id column as fallback
-          if (restError && restError.code === 'PGRST116') {
-            console.log(`⚠️ No restaurant found with restaurant_id, trying id column...`);
-            const { data: restaurantById, error: idError } = await supabase
+          if (restError || !restaurant) {
+            // Try with id column as fallback
+            const { data: restaurantById } = await supabase
               .from('restaurants')
               .select('*')
               .eq('id', order.restaurant_id)
-              .single();
-            
-            if (!idError && restaurantById) {
-              restaurant = restaurantById;
-              restError = null;
-            } else {
-              restError = idError;
-            }
+              .maybeSingle();
+            restaurant = restaurantById || null;
           }
           
-          if (restError) {
-            console.error(`❌ Error fetching restaurant ${order.restaurant_id} for order ${order.order_id}:`, restError);
-            order.restaurants = null;
-          } else if (restaurant) {
-            console.log(`✅ Found restaurant for delivered order ${order.order_id}:`, restaurant.name || restaurant.Name || 'NO NAME');
-            // Map restaurant data - handle different possible column names
+          if (restaurant) {
             order.restaurants = {
               restaurant_id: restaurant.restaurant_id || restaurant.id,
               name: restaurant.name || restaurant.Name || restaurant.restaurant_name || 'Unknown',
@@ -1389,7 +1189,6 @@ export async function getStaffDeliveredOrders(staffId: string) {
               state: restaurant.state || restaurant.State
             };
           } else {
-            console.warn(`⚠️ No restaurant found with restaurant_id: ${order.restaurant_id} for order ${order.order_id}`);
             order.restaurants = null;
           }
         } catch (err) {
@@ -1432,12 +1231,60 @@ export async function assignOrderToStaff(orderId: string, staffId: string) {
   return data as Order;
 }
 
-// Assign driver to order - sets status to Active, marks driver unavailable
+// Assign driver to order - validates driver is active/available, sets status to "Assigned"
 export async function assignDriverToOrder(orderId: string, driverId: string, staffId: string) {
   console.log('🔵 assignDriverToOrder() - Assigning driver', driverId, 'to order', orderId);
   
-  // First, mark the driver as unavailable
-  // Try driver_id first, then fallback to id if driver_id doesn't exist
+  // First, fetch the driver to validate they are active and available
+  let { data: driverData, error: driverFetchError } = await supabase
+    .from('drivers')
+    .select('driver_id, full_name, employment_status, is_available')
+    .eq('driver_id', driverId)
+    .maybeSingle();
+
+  // If driver_id column doesn't exist, try using id column
+  if (driverFetchError || !driverData) {
+    const { data: driverById, error: driverByIdError } = await supabase
+      .from('drivers')
+      .select('driver_id, full_name, employment_status, is_available, id')
+      .eq('id', driverId)
+      .maybeSingle();
+    
+    if (!driverByIdError && driverById) {
+      driverData = driverById;
+      driverFetchError = null;
+    }
+  }
+
+  if (driverFetchError || !driverData) {
+    console.error('❌ Error fetching driver:', driverFetchError);
+    throw new Error(`Driver not found: ${driverId}`);
+  }
+
+  // Validate driver is active and available
+  const isActive = isDriverActiveAndAvailable(driverData);
+  if (!isActive) {
+    const driverName = driverData.full_name || driverData.driver_id || driverId;
+    const employmentStatus = driverData.employment_status || 'NULL';
+    const isAvailable = driverData.is_available;
+    
+    console.error('❌ Driver validation failed:', {
+      driver_id: driverId,
+      driver_name: driverName,
+      employment_status: employmentStatus,
+      is_available: isAvailable,
+      reason: !(employmentStatus === 'active' || employmentStatus === true || employmentStatus === 'Active') 
+        ? 'employment_status is not active' 
+        : !isAvailable 
+        ? 'is_available is false' 
+        : 'unknown'
+    });
+    throw new Error(`Cannot assign this driver. Driver is inactive or unavailable.`);
+  }
+
+  console.log('✅ Driver validated as active and available:', driverData.full_name || driverData.driver_id);
+
+  // Mark the driver as unavailable
   let driverUpdateQuery = supabase
     .from('drivers')
     .update({ 
@@ -1468,10 +1315,10 @@ export async function assignDriverToOrder(orderId: string, driverId: string, sta
   
   console.log('✅ Driver marked as unavailable');
 
-  // Then update the order: set driver_id, status to Active
+  // Update the order: set driver_id, status to "Assigned" (normalized)
   const updateData: any = {
     driver_id: driverId,
-    status: 'Active',
+    status: 'Assigned', // Use standardized status
     updated_at: new Date().toISOString()
   };
 
@@ -1511,29 +1358,29 @@ export async function assignDriverToOrder(orderId: string, driverId: string, sta
   return data as Order;
 }
 
-// Confirm delivery - sets status to Delivered, records delivered_at, makes driver available again
+// Complete order - sets status to "Completed", records delivered_at, makes driver available again
 export async function confirmDelivery(orderId: string, deliveredAt: string) {
-  console.log('🔵 confirmDelivery() - Confirming delivery for order', orderId);
+  console.log('🔵 confirmDelivery() - Completing order', orderId);
   
   // First get the order to find the driver_id
   const { data: orderData, error: fetchError } = await supabase
     .from('orders')
-    .select('driver_id')
+    .select('driver_id, status')
     .eq('order_id', orderId)
     .single();
 
   if (fetchError) {
-    console.error('❌ Error fetching order for delivery confirmation:', fetchError);
+    console.error('❌ Error fetching order for completion:', fetchError);
     throw fetchError;
   }
 
-  console.log('✅ Found order with driver_id:', orderData.driver_id);
+  console.log('✅ Found order with driver_id:', orderData.driver_id, 'current status:', orderData.status);
 
-  // Update the order: set status to Delivered, record delivered_at
+  // Update the order: set status to "Completed" (normalized), record delivered_at
   const { data, error } = await supabase
     .from('orders')
     .update({ 
-      status: 'Delivered',
+      status: 'Completed', // Use standardized status
       delivered_at: deliveredAt,
       updated_at: new Date().toISOString()
     })
@@ -1593,11 +1440,12 @@ export async function getStaffByUsername(username: string) {
   
   // Don't use .single() - it throws when there are 0 rows
   // Instead, fetch and handle the result
-  // Try different possible column names for username
+  // Query staffuser table filtering by username and Status = true
   let { data, error } = await supabase
     .from('staffuser')
     .select('*')
-    .eq('username', username)
+    .eq('username', username.trim())
+    .eq('Status', true) // Only return active staff members
     .limit(1);
 
   // If that fails, try other possible column names
@@ -1629,6 +1477,19 @@ export async function getStaffByUsername(username: string) {
   
   const staffData = data[0];
   console.log('✅ Found staff member:', staffData.username || staffData.Username || 'unknown');
+  console.log('🔍 Staff data:', { 
+    username: staffData.username, 
+    Status: staffData.Status, 
+    pass: staffData.pass,
+    passType: typeof staffData.pass
+  });
+  
+  // Check if staff member is active (Status = true)
+  const isActive = staffData.Status === true || staffData.Status === 'true' || staffData.status === true;
+  if (!isActive) {
+    console.warn('⚠️ Staff member is not active (Status = false)');
+    return null;
+  }
   
   // Map the data to match StaffMember interface
   const mapped: any = {
@@ -1640,29 +1501,68 @@ export async function getStaffByUsername(username: string) {
     role: staffData.role || 'support',
     email: staffData.email || `${username}@frontdash.app`,
     password_hash: staffData.password_hash,
+    pass: staffData.pass !== null && staffData.pass !== undefined ? Number(staffData.pass) : null, // Include pass field (numeric PIN)
     first_time_login: staffData.first_time_login !== undefined ? staffData.first_time_login : false
   };
   
   return mapped as StaffMember;
 }
 
-// Update staff password
-export async function updateStaffPassword(staffId: string, passwordHash: string) {
-  const { data, error } = await supabase
+// Update staff password (PIN) - stores numeric PIN in pass field only
+export async function updateStaffPassword(username: string, newPIN: number) {
+  console.log('🔵 updateStaffPassword() - Updating password for username:', username, 'PIN:', newPIN);
+  
+  if (!username || username.trim() === '') {
+    throw new Error('Username is required to update password');
+  }
+
+  // Try updating by username first - ONLY update the pass field
+  let { data, error } = await supabase
     .from('staffuser')
     .update({ 
-      password_hash: passwordHash,
-      first_time_login: false
+      pass: newPIN // Store numeric PIN in pass field only
     })
-    .eq('id', staffId)
-    .select()
-    .single();
+    .eq('username', username.trim()) // Use username as primary key
+    .select();
+
+  // If that fails, try alternative column names
+  if (error || !data || data.length === 0) {
+    console.log('⚠️ Username update failed, trying alternative column names...');
+    const { data: data2, error: error2 } = await supabase
+      .from('staffuser')
+      .update({ 
+        pass: newPIN // Store numeric PIN in pass field only
+      })
+      .or(`username.eq.${username.trim()},Username.eq.${username.trim()}`)
+      .select();
+    
+    if (!error2 && data2 && data2.length > 0) {
+      data = data2;
+      error = null;
+    } else if (error2) {
+      error = error2;
+    }
+  }
 
   if (error) {
-    console.error('Error updating staff password:', error);
-    throw error;
+    console.error('❌ Error updating staff password:', error);
+    console.error('Error details:', {
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      code: error.code,
+      username: username
+    });
+    throw new Error(`Failed to update password: ${error.message}`);
   }
-  return data as StaffMember;
+
+  if (!data || data.length === 0) {
+    console.error('❌ No staff member found with username:', username);
+    throw new Error(`No staff member found with username: ${username}`);
+  }
+
+  console.log('✅ Password updated successfully for username:', username);
+  return data[0] as StaffMember;
 }
 
 // ========== STAFF OPERATIONS ==========
@@ -1715,29 +1615,29 @@ export async function getStaffMembers() {
   return mappedData as StaffMember[];
 }
 
-export async function createStaffMember(firstname: string, lastname: string) {
-  // Generate username: firstname + lastname + number (if needed)
-  const baseUsername = `${firstname.toLowerCase()}${lastname.toLowerCase()}`;
+export async function createStaffMember(firstname: string, lastname: string, email: string) {
+  // Generate username: (firstname + lastname).toLowerCase().replace(/\s+/g, "")
+  const baseUsername = `${firstname}${lastname}`.toLowerCase().replace(/\s+/g, '');
   
   // Check if base username exists
   const { data: existing } = await supabase
     .from('staffuser')
     .select('username')
     .eq('username', baseUsername)
-    .single();
+    .maybeSingle();
   
   let username = baseUsername;
   
-  // If base username exists, append a number
+  // If base username exists, append numbers until unique (sarahmullard01, sarahmullard02, etc.)
   if (existing) {
-    // Find the highest number suffix for this base username
+    // Find all usernames that start with the base username
     const { data: allWithBase } = await supabase
       .from('staffuser')
       .select('username')
       .like('username', `${baseUsername}%`);
     
     if (allWithBase && allWithBase.length > 0) {
-      // Extract numbers from existing usernames
+      // Extract numbers from existing usernames (e.g., sarahmullard01 -> 1)
       const numbers = allWithBase
         .map(u => {
           const match = u.username.match(new RegExp(`^${baseUsername}(\\d+)$`));
@@ -1745,12 +1645,16 @@ export async function createStaffMember(firstname: string, lastname: string) {
         })
         .filter(n => n > 0);
       
+      // Find the next available number
       const nextNumber = numbers.length > 0 ? Math.max(...numbers) + 1 : 1;
-      username = `${baseUsername}${nextNumber}`;
+      username = `${baseUsername}${String(nextNumber).padStart(2, '0')}`;
     } else {
-      username = `${baseUsername}1`;
+      username = `${baseUsername}01`;
     }
   }
+  
+  // Generate a random 5-digit password (10000 to 99999)
+  const password = Math.floor(10000 + Math.random() * 90000);
   
   const { data, error } = await supabase
     .from('staffuser')
@@ -1758,7 +1662,9 @@ export async function createStaffMember(firstname: string, lastname: string) {
       username,
       firstname,
       lastname,
-      Status: true
+      email,
+      Status: true,
+      pass: password
     }])
     .select()
     .single();
@@ -1773,8 +1679,9 @@ export async function createStaffMember(firstname: string, lastname: string) {
     firstname: data.firstname,
     lastname: data.lastname,
     username: data.username,
+    password: password.toString(), // Return password as string for display
     status: data.Status ? 'active' : 'inactive'
-  } as StaffMember;
+  } as any;
 }
 
 export async function deleteStaffMember(identifier: string) {
@@ -1855,11 +1762,8 @@ export async function getDrivers() {
       };
     })
     // Sort by full name in JavaScript if needed
-    .sort((a, b) => a['Full name'].localeCompare(b['Full name']))
-    // Filter to only show active drivers who are available
-    .filter((driver: Driver) => {
-      return driver.employment_status === 'active' && driver.is_available === true;
-    });
+    .sort((a, b) => a['Full name'].localeCompare(b['Full name']));
+    // Don't filter - return ALL drivers so UI can show inactive ones as disabled
 
   return mappedData as Driver[];
 }

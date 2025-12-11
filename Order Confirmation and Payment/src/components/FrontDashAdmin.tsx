@@ -67,7 +67,7 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
   const [showAddDriverDialog, setShowAddDriverDialog] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<any>(null);
   const [deleteType, setDeleteType] = useState<'driver' | 'staff' | 'restaurant'>('driver');
-  const [newStaffForm, setNewStaffForm] = useState({ firstName: '', lastName: '' });
+  const [newStaffForm, setNewStaffForm] = useState({ firstName: '', lastName: '', email: '' });
   const [newDriverForm, setNewDriverForm] = useState({ firstName: '', lastName: '' });
 
   // Data will be loaded from database
@@ -84,6 +84,8 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
   const [showApprovalModal, setShowApprovalModal] = useState(false);
   const [approvedRestaurantCredentials, setApprovedRestaurantCredentials] = useState<{ username: string; password: string; restaurantName: string } | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const [selectedRegistration, setSelectedRegistration] = useState<any>(null);
+  const [showRegistrationDetails, setShowRegistrationDetails] = useState(false);
 
   // Load drivers from database
   useEffect(() => {
@@ -187,6 +189,31 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
 
   // Action handlers
   const handleApproveRegistration = async (id: string) => {
+    // Find the registration to check for menu/hours
+    const registration = registrations.find((r: any) => r.id === id);
+    if (registration) {
+      // Parse note JSON to check if menu items and operating hours are present
+      let parsedNote: { menuItems?: any[]; operatingHours?: any } | null = null;
+      try {
+        parsedNote = JSON.parse(registration.note ?? '{}');
+      } catch {}
+      
+      const hasMenuItems = Array.isArray(parsedNote?.menuItems) && parsedNote.menuItems.length > 0;
+      const hasOperatingHours = !!(
+        parsedNote?.operatingHours?.monFri ||
+        parsedNote?.operatingHours?.sat ||
+        parsedNote?.operatingHours?.sun
+      );
+      
+      if (!hasMenuItems || !hasOperatingHours) {
+        const missing = [];
+        if (!hasMenuItems) missing.push('menu items');
+        if (!hasOperatingHours) missing.push('operating hours');
+        toast.error(`This request is missing ${missing.join(' and/or ')}. Please reject it and ask the restaurant to resubmit with complete information.`);
+        return;
+      }
+    }
+
     if (!confirm('Are you sure you want to approve this restaurant registration?')) {
       return;
     }
@@ -282,25 +309,51 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
   };
 
   const handleAddStaff = async () => {
-    if (!newStaffForm.firstName.trim() || !newStaffForm.lastName.trim()) {
-      toast.error('Please fill in all required fields');
+    // Validate all required fields
+    if (!newStaffForm.firstName.trim() || !newStaffForm.lastName.trim() || !newStaffForm.email.trim()) {
+      toast.error('Please fill in all required fields (First Name, Last Name, and Email)');
+      return;
+    }
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(newStaffForm.email.trim())) {
+      toast.error('Please enter a valid email address');
       return;
     }
 
     setIsLoadingStaff(true);
     try {
-      const newStaff = await createStaffMember(
+      const result = await createStaffMember(
         newStaffForm.firstName.trim(),
-        newStaffForm.lastName.trim()
+        newStaffForm.lastName.trim(),
+        newStaffForm.email.trim()
       );
       
       // Reload staff list to get the updated data
       const staffData = await getStaffMembers();
       setStaffMembers(staffData);
       
-      setNewStaffForm({ firstName: '', lastName: '' });
+      // Reset form and close modal
+      setNewStaffForm({ firstName: '', lastName: '', email: '' });
       setShowAddStaffDialog(false);
-      toast.success(`Staff member ${newStaff.firstname} ${newStaff.lastname} added successfully!`);
+      
+      // Show success message with credentials - format it clearly
+      const staffName = `${newStaffForm.firstName.trim()} ${newStaffForm.lastName.trim()}`;
+      toast.success(
+        `Staff member ${staffName} created successfully.\nUsername: ${result.username}\nTemporary password: ${result.password}`,
+        { 
+          duration: 15000,
+          style: { whiteSpace: 'pre-line' }
+        }
+      );
+      
+      // Also log to console for debugging
+      console.log('✅ Staff member created:', {
+        username: result.username,
+        password: result.password,
+        name: staffName
+      });
     } catch (error: any) {
       console.error('Error adding staff member:', error);
       const errorMessage = error.message || 'Failed to add staff member';
@@ -520,8 +573,15 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
                             </Badge>
                           </TableCell>
                           <TableCell>
-                            <Button size="sm" variant="ghost" disabled>
-                              <FileText className="h-4 w-4 text-gray-400" />
+                            <Button 
+                              size="sm" 
+                              variant="ghost"
+                              onClick={() => {
+                                setSelectedRegistration(registration);
+                                setShowRegistrationDetails(true);
+                              }}
+                            >
+                              <FileText className="h-4 w-4" />
                             </Button>
                           </TableCell>
                           <TableCell>{registration.decided_at ? new Date(registration.decided_at).toLocaleDateString() : '—'}</TableCell>
@@ -969,9 +1029,22 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
                 placeholder="Enter last name"
               />
             </div>
+            <div>
+              <Label htmlFor="staffEmail">Email</Label>
+              <Input
+                id="staffEmail"
+                type="email"
+                value={newStaffForm.email}
+                onChange={(e) => setNewStaffForm({...newStaffForm, email: e.target.value})}
+                placeholder="Enter email address"
+              />
+            </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowAddStaffDialog(false)}>
+            <Button variant="outline" onClick={() => {
+              setShowAddStaffDialog(false);
+              setNewStaffForm({ firstName: '', lastName: '', email: '' });
+            }}>
               Cancel
             </Button>
             <Button onClick={handleAddStaff} disabled={isLoadingStaff}>
@@ -1016,6 +1089,120 @@ export function FrontDashAdmin({ onNavigateHome }: FrontDashAdminProps = {}) {
             </Button>
             <Button onClick={handleAddDriver} disabled={isLoadingDrivers}>
               {isLoadingDrivers ? 'Adding...' : 'Hire Driver'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Registration Details Modal */}
+      <Dialog open={showRegistrationDetails} onOpenChange={setShowRegistrationDetails}>
+        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Restaurant Registration Details</DialogTitle>
+            <DialogDescription>
+              View menu items and operating hours for this registration request
+            </DialogDescription>
+          </DialogHeader>
+          
+          {selectedRegistration && (() => {
+            // Parse note JSON
+            let parsedNote: { menuItems?: any[]; operatingHours?: any } | null = null;
+            try {
+              parsedNote = JSON.parse(selectedRegistration.note ?? '{}');
+            } catch {}
+            
+            const hasMenuItems = Array.isArray(parsedNote?.menuItems) && parsedNote.menuItems.length > 0;
+            const hasOperatingHours = !!(
+              parsedNote?.operatingHours?.monFri ||
+              parsedNote?.operatingHours?.sat ||
+              parsedNote?.operatingHours?.sun
+            );
+            
+            return (
+              <div className="space-y-6 py-4">
+                {/* Basic Info */}
+                <div>
+                  <h3 className="font-semibold mb-2">Restaurant Information</h3>
+                  <div className="space-y-1 text-sm">
+                    <p><strong>Name:</strong> {selectedRegistration.proposed_name || 'N/A'}</p>
+                    <p><strong>Contact:</strong> {selectedRegistration.proposed_contact_name || 'N/A'}</p>
+                    <p><strong>Email:</strong> {selectedRegistration.proposed_contact_email || 'N/A'}</p>
+                    <p><strong>Phone:</strong> {selectedRegistration.proposed_phone || 'N/A'}</p>
+                    <p><strong>Address:</strong> {selectedRegistration.proposed_address || 'N/A'}</p>
+                  </div>
+                </div>
+                
+                {/* Menu Items */}
+                <div>
+                  <h3 className="font-semibold mb-2">Menu Items {!hasMenuItems && <span className="text-red-600 text-sm">(Missing)</span>}</h3>
+                  {hasMenuItems ? (
+                    <div className="border rounded-lg overflow-hidden">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Name</TableHead>
+                            <TableHead>Price</TableHead>
+                            <TableHead>Description</TableHead>
+                            <TableHead>Availability</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {parsedNote!.menuItems!.map((item: any, index: number) => (
+                            <TableRow key={index}>
+                              <TableCell className="font-medium">{item.name}</TableCell>
+                              <TableCell>${(item.price || 0).toFixed(2)}</TableCell>
+                              <TableCell>{item.description || '—'}</TableCell>
+                              <TableCell>
+                                <Badge variant={item.is_available ? 'default' : 'secondary'}>
+                                  {item.is_available ? 'Available' : 'Not Available'}
+                                </Badge>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-500">No menu items provided</p>
+                  )}
+                </div>
+                
+                {/* Operating Hours */}
+                <div>
+                  <h3 className="font-semibold mb-2">Operating Hours {!hasOperatingHours && <span className="text-red-600 text-sm">(Missing)</span>}</h3>
+                  {hasOperatingHours ? (
+                    <div className="space-y-2 text-sm">
+                      {parsedNote!.operatingHours!.monFri && (
+                        <p><strong>Mon–Fri:</strong> {parsedNote!.operatingHours!.monFri}</p>
+                      )}
+                      {parsedNote!.operatingHours!.sat && (
+                        <p><strong>Saturday:</strong> {parsedNote!.operatingHours!.sat}</p>
+                      )}
+                      {parsedNote!.operatingHours!.sun && (
+                        <p><strong>Sunday:</strong> {parsedNote!.operatingHours!.sun}</p>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-500">No operating hours provided</p>
+                  )}
+                </div>
+                
+                {/* Validation Warning */}
+                {(!hasMenuItems || !hasOperatingHours) && (
+                  <Alert variant="destructive">
+                    <AlertDescription>
+                      This request is missing {!hasMenuItems && !hasOperatingHours ? 'menu items and operating hours' : !hasMenuItems ? 'menu items' : 'operating hours'}. 
+                      Please reject it and ask the restaurant to resubmit with complete information.
+                    </AlertDescription>
+                  </Alert>
+                )}
+              </div>
+            );
+          })()}
+          
+          <DialogFooter>
+            <Button onClick={() => setShowRegistrationDetails(false)}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

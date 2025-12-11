@@ -113,7 +113,8 @@ export function LoginPage({ onLogin, onBackToHome }: LoginPageProps) {
 
     if (!credentials.password.trim()) {
       formErrors.push('Password is required');
-    } else if (!validatePassword(credentials.password)) {
+    } else if (credentials.role !== 'staff' && !validatePassword(credentials.password)) {
+      // Skip password complexity validation for staff (they use numeric PINs)
       formErrors.push('Password must contain at least 8 characters with uppercase, lowercase, number, and special character (!@#$%^&*)');
     }
 
@@ -136,11 +137,21 @@ export function LoginPage({ onLogin, onBackToHome }: LoginPageProps) {
           
           // If staff member found in database, use it
           if (staffMember) {
-            // Simple password check (in production, use proper hashing)
-            // For demo, check if password_hash exists or use demo accounts
-            const passwordHash = btoa(credentials.password);
-            const isValidPassword = staffMember.password_hash === passwordHash || 
-              !staffMember.password_hash; // Allow demo accounts without password_hash
+            // Staff passwords are stored as numeric PINs in the 'pass' column (int8)
+            // Convert entered password to number and compare with staffMember.pass
+            const inputPin = Number(credentials.password.trim());
+            const isValidPassword = !isNaN(inputPin) && 
+              staffMember.pass !== null && 
+              staffMember.pass !== undefined &&
+              Number(staffMember.pass) === inputPin;
+
+            console.log('🔍 Staff login attempt:', {
+              username: credentials.username.trim(),
+              inputPin,
+              storedPass: staffMember.pass,
+              passType: typeof staffMember.pass,
+              isValid: isValidPassword
+            });
 
             if (isValidPassword) {
               const account = {
@@ -156,6 +167,12 @@ export function LoginPage({ onLogin, onBackToHome }: LoginPageProps) {
               onLogin('staff', account);
               setIsLoading(false);
               return;
+            } else {
+              console.log('❌ Password mismatch:', { 
+                entered: inputPin, 
+                stored: staffMember.pass,
+                isValid: isValidPassword 
+              });
             }
           }
           

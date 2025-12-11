@@ -1,3 +1,6 @@
+/**
+ * FrontDashStaff Component - Staff Dashboard and Orders Management
+ */
 import { useState, useEffect } from 'react';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -34,7 +37,9 @@ import {
   confirmDelivery,
   getDrivers,
   updateStaffPassword,
-  getStaffByUsername
+  getStaffByUsername,
+  isDriverActiveAndAvailable,
+  normalizeOrderStatus
 } from '../lib/services/database';
 import { supabase, Order, Driver, StaffMember } from '../lib/supabase';
 
@@ -82,6 +87,9 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
   const [selectedDriverId, setSelectedDriverId] = useState<string>('');
   const [searchOrderId, setSearchOrderId] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [showCompleteOrder, setShowCompleteOrder] = useState(false);
+  const [deliveryDate, setDeliveryDate] = useState('');
+  const [deliveryTime, setDeliveryTime] = useState('');
   
   const getDriverName = (driverId?: string, driverNameFromOrder?: string) => {
     if (driverNameFromOrder) return driverNameFromOrder;
@@ -122,53 +130,55 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
     return () => clearInterval(interval);
   }, [staffId]);
 
+  // Load orders from Supabase - fetch all orders and filter by status
+  // Order Queue: status = 'Pending' or 'Queued'
+  // Active Orders: status = 'Assigned' or 'confirmed'
+  // Order History: status = 'Completed' (delivered today)
   const loadData = async () => {
     try {
       setIsLoading(true);
-      console.log('Loading data for staff dashboard...');
-      console.log('Calling getPendingOrders()...');
+      console.log('🔄 Loading data for staff dashboard from Supabase...');
       
+      // Fetch orders from Supabase - functions now fetch all orders and filter by status
       let pending;
       try {
-        pending = await getPendingOrders();
-        console.log('getPendingOrders() completed successfully');
+        pending = await getPendingOrders(); // Returns orders with status 'Pending' or 'Queued'
+        console.log('✅ getPendingOrders() completed - Order Queue:', pending?.length || 0);
       } catch (pendingError: any) {
-        console.error('ERROR in getPendingOrders():', pendingError);
-        console.error('Error details:', pendingError.message, pendingError.stack);
+        console.error('❌ ERROR in getPendingOrders():', pendingError);
+        toast.error('Failed to load orders from queue');
         pending = [];
       }
       
-      // Always load all orders (functions no longer filter by staff_id)
-      // Always load pending orders, active orders, delivered orders, and drivers
+      // Fetch active orders, completed orders, and drivers
       const [active, delivered, driversList] = await Promise.all([
         getStaffActiveOrders(staffId || '').catch((err) => {
-          console.error('Error loading active orders:', err);
+          console.error('❌ Error loading active orders:', err);
+          toast.error('Failed to load active orders');
           return [];
         }),
         getStaffDeliveredOrders(staffId || '').catch((err) => {
-          console.error('Error loading delivered orders:', err);
+          console.error('❌ Error loading completed orders:', err);
+          toast.error('Failed to load order history');
           return [];
         }),
         getDrivers().catch(() => [])
       ]);
       
-      console.log('=== PENDING ORDERS RESULT ===');
-      console.log('Pending orders received:', pending?.length || 0);
-      console.log('Pending orders type:', typeof pending);
-      console.log('Pending orders is array?', Array.isArray(pending));
+      console.log('📊 Orders Summary:');
+      console.log('  - Order Queue (Pending/Queued):', pending?.length || 0);
+      console.log('  - Active Orders (Assigned/confirmed):', active?.length || 0);
+      console.log('  - Order History (Completed today):', delivered?.length || 0);
+      
       if (pending && pending.length > 0) {
-        console.log('Pending orders data:', pending);
-        console.log('First pending order:', pending[0]);
-        console.log('First pending order status:', pending[0].status);
-      } else {
-        console.warn('⚠️ No pending orders returned from getPendingOrders()');
-        console.warn('pending value:', pending);
-        console.warn('pending === null?', pending === null);
-        console.warn('pending === undefined?', pending === undefined);
+        console.log('📋 Order Queue IDs:', pending.map((o: any) => o.order_id));
       }
-      console.log('=== END PENDING ORDERS RESULT ===');
-      console.log('Active orders received:', active?.length || 0);
-      console.log('Delivered orders received:', delivered?.length || 0);
+      if (active && active.length > 0) {
+        console.log('📋 Active Order IDs:', active.map((o: any) => o.order_id));
+      }
+      if (delivered && delivered.length > 0) {
+        console.log('📋 Completed Order IDs:', delivered.map((o: any) => o.order_id));
+      }
       
       // Ensure orders have the right structure for display
       const formattedPending = (pending || []).map((order: any) => ({
@@ -305,15 +315,39 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
         return;
       }
       
+      console.log('🟢 Assigning driver:', {
+        orderId: orderIdToUse,
+        driverId: selectedDriverId,
+        staffId: staffId
+      });
+      
+      // Get driver name for success message
+      const selectedDriver = drivers.find(d => {
+        const dId = d.driver_id || (d as any).id;
+        return dId === selectedDriverId;
+      });
+      const driverName = selectedDriver?.['Full name'] || (selectedDriver as any)?.full_name || selectedDriverId;
+      
+      // Call the assignment function
       await assignDriverToOrder(orderIdToUse, selectedDriverId, staffId);
-      toast.success('Driver assigned successfully. Order moved to Active Orders.');
+      
+      console.log('✅ Driver assignment successful');
+      toast.success(`Driver ${driverName} assigned to order ${orderIdToUse}.`);
+      
+      // Close modal and reset state
       setShowAssignDriver(false);
       setSelectedOrder(null);
       setSelectedDriverId('');
+      
+      // Refresh data to show updated order status
       await loadData();
     } catch (error: any) {
-      console.error('Error assigning driver:', error);
-      toast.error(error.message || 'Failed to assign driver');
+      console.error('❌ Error assigning driver:', error);
+      // Show the specific error message from the validation
+      const errorMessage = error.message || 'Failed to assign driver';
+      toast.error(errorMessage);
+      // Keep modal open on error so user can try another driver
+      // Don't reset selectedDriverId so user can see which driver failed
     } finally {
       setIsLoading(false);
     }
@@ -344,6 +378,78 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
     }
   };
 
+  // Open complete order modal - sets up default date/time
+  const handleOpenCompleteOrder = (order: OrderWithDetails) => {
+    setSelectedOrder(order);
+    // Set default to current date and time
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    
+    setDeliveryDate(`${year}-${month}-${day}`);
+    setDeliveryTime(`${hours}:${minutes}`);
+    setShowCompleteOrder(true);
+  };
+
+  // Complete order - sets status to "Completed" and records delivered_at
+  const handleCompleteOrder = async () => {
+    if (!selectedOrder) {
+      toast.error('No order selected');
+      return;
+    }
+
+    const orderIdToUse = selectedOrder.order_id || selectedOrder.id;
+    if (!orderIdToUse) {
+      toast.error('Order ID not found');
+      return;
+    }
+
+    // Validate delivery date and time
+    if (!deliveryDate || !deliveryTime) {
+      toast.error('Please enter both delivery date and time');
+      return;
+    }
+
+    // Combine date and time into ISO string
+    const deliveredAt = new Date(`${deliveryDate}T${deliveryTime}`).toISOString();
+    
+    // Validate the date
+    if (isNaN(new Date(deliveredAt).getTime())) {
+      toast.error('Invalid date or time format');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      console.log('🟢 Completing order:', orderIdToUse, 'with delivery time:', deliveredAt);
+      
+      await confirmDelivery(orderIdToUse, deliveredAt);
+      
+      console.log('✅ Order completion successful, refreshing data...');
+      toast.success(`Order ${orderIdToUse} marked as completed.`);
+      
+      // Close modals and reset form
+      setShowCompleteOrder(false);
+      setShowOrderDetails(false);
+      setSelectedOrder(null);
+      setDeliveryDate('');
+      setDeliveryTime('');
+      
+      // Refresh order lists
+      await loadData();
+      
+      console.log('✅ Data refreshed - order should now appear in Completed Orders tab');
+    } catch (error: any) {
+      console.error('❌ Error completing order:', error);
+      toast.error(error.message || 'Failed to complete order. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleSearchOrder = () => {
     if (!searchOrderId.trim()) {
       toast.error('Please enter an order ID');
@@ -363,11 +469,11 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
   };
 
   const validatePassword = (password: string): boolean => {
-    const hasUpper = /[A-Z]/.test(password);
-    const hasLower = /[a-z]/.test(password);
-    const hasNumber = /\d/.test(password);
-    const isLongEnough = password.length >= 6;
-    return hasUpper && hasLower && hasNumber && isLongEnough;
+    // For staff, password must be numeric PIN (4-6 digits)
+    const isNumeric = /^\d+$/.test(password);
+    const isLongEnough = password.length >= 4;
+    const isNotTooLong = password.length <= 6;
+    return isNumeric && isLongEnough && isNotTooLong;
   };
 
   const handleChangePassword = async () => {
@@ -377,7 +483,7 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
     }
 
     if (!validatePassword(newPassword)) {
-      toast.error('Password must be at least 6 characters with uppercase, lowercase, and number');
+      toast.error('Password must be 4-6 digits (numeric PIN only)');
       return;
     }
 
@@ -388,10 +494,30 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
 
     try {
       setIsLoading(true);
-      // Hash password (in production, use proper hashing like bcrypt)
-      const passwordHash = btoa(newPassword); // Simple encoding for demo
+      // Convert password to numeric PIN
+      const numericPIN = parseInt(newPassword, 10);
       
-      await updateStaffPassword(staffId, passwordHash);
+      if (isNaN(numericPIN)) {
+        toast.error('Password must be numeric');
+        return;
+      }
+
+      // Use username instead of staffId since staffuser table uses username as primary key
+      // Prefer staffMember.username (loaded from DB) over staffUser.username (from login)
+      const username = staffMember?.username || staffUser?.username || staffId;
+      
+      if (!username || username.trim() === '') {
+        toast.error('Unable to identify staff member. Please log out and log back in.');
+        console.error('No username available for password update', {
+          staffMemberUsername: staffMember?.username,
+          staffUserUsername: staffUser?.username,
+          staffId: staffId
+        });
+        return;
+      }
+
+      console.log('🔵 handleChangePassword() - Updating password for username:', username);
+      await updateStaffPassword(username, numericPIN);
       toast.success('Password updated successfully');
       setCurrentPassword('');
       setNewPassword('');
@@ -399,8 +525,9 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
       setShowChangePassword(false);
       await loadStaffMember();
     } catch (error: any) {
-      console.error('Error changing password:', error);
-      toast.error('Failed to change password');
+      console.error('❌ Error changing password:', error);
+      const errorMessage = error.message || 'Failed to change password';
+      toast.error(errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -610,11 +737,11 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
                       {order.status === 'Active' ? (
                         <Button 
                           size="sm" 
-                          onClick={() => handleConfirmDelivery(order)}
+                          onClick={() => handleOpenCompleteOrder(order)}
                           disabled={isLoading}
                           className="!bg-green-600 hover:!bg-green-700 !text-white border-0"
                         >
-                          Mark as Delivered
+                          Complete Order
                         </Button>
                       ) : (
                         '—'
@@ -859,18 +986,22 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
                       )}
                   </TableCell>
                   <TableCell>
-                    {order.status === 'Active' ? (
-                      <Button 
-                        size="sm" 
-                        onClick={() => handleConfirmDelivery(order)}
-                        disabled={isLoading}
-                        className="!bg-green-600 hover:!bg-green-700 !text-white border-0"
-                      >
-                        Mark as Delivered
-                      </Button>
-                    ) : (
-                      '—'
-                    )}
+                    {(() => {
+                      const normalizedStatus = normalizeOrderStatus(order.status);
+                      if (normalizedStatus === 'Assigned') {
+                        return (
+                          <Button 
+                            size="sm" 
+                            onClick={() => handleOpenCompleteOrder(order)}
+                            disabled={isLoading}
+                            className="!bg-green-600 hover:!bg-green-700 !text-white border-0"
+                          >
+                            Complete Order
+                          </Button>
+                        );
+                      }
+                      return '—';
+                    })()}
                   </TableCell>
                 </TableRow>
               ))}
@@ -1005,14 +1136,14 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
             </div>
           </div>
           <div>
-            <Label htmlFor="newPassword">New password</Label>
+            <Label htmlFor="newPassword">New password (4-6 digit PIN)</Label>
             <div className="relative">
               <Input
                 id="newPassword"
                 type={showNewPassword ? 'text' : 'password'}
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Enter new password"
+                placeholder="Enter 4-6 digit numeric PIN"
                 className="pr-10"
               />
               <button
@@ -1191,7 +1322,7 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
               <div className="border-t pt-4">
                 <div className="flex justify-between font-semibold">
                   <span>Total:</span>
-                  <span>${selectedOrder.total.toFixed(2)}</span>
+                  <span>${((selectedOrder.total || selectedOrder.subtotal || 0)).toFixed(2)}</span>
                 </div>
               </div>
             </div>
@@ -1213,48 +1344,144 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
       </Dialog>
 
       {/* Assign Driver Dialog */}
-      <Dialog open={showAssignDriver} onOpenChange={setShowAssignDriver}>
+      <Dialog open={showAssignDriver} onOpenChange={(open) => {
+        setShowAssignDriver(open);
+        if (!open) {
+          // Reset state when dialog closes
+          setSelectedDriverId('');
+        }
+      }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Assign Driver</DialogTitle>
+            <DialogTitle>Assign Driver for order {selectedOrder?.order_id || selectedOrder?.order_number || 'N/A'}</DialogTitle>
             <DialogDescription>
-              Select a driver to assign to order {selectedOrder?.order_number}
+              Select a driver to assign to this order. Only active and available drivers can be assigned.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 max-h-96 overflow-y-auto">
-            {drivers.map((driver) => (
-              <button
-                key={driver.driver_id}
-                onClick={() => setSelectedDriverId(driver.driver_id)}
-                className={`w-full p-3 rounded-lg border-2 text-left transition-colors ${
-                  selectedDriverId === driver.driver_id
-                    ? 'border-orange-500 bg-orange-50'
-                    : 'border-gray-200 hover:bg-gray-50'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-medium">
-                    {driver['Full name']}
-                  </span>
-                  <Badge variant={driver.employment_status === 'active' && driver.is_available ? 'default' : 'secondary'}>
-                    {driver.is_available ? 'Available' : 'Unavailable'}
-                  </Badge>
-                </div>
-              </button>
-            ))}
-            {drivers.length === 0 && (
-              <p className="text-center text-gray-500 py-4">No drivers available</p>
+            {drivers.length === 0 ? (
+              <p className="text-center text-gray-500 py-4">Loading drivers...</p>
+            ) : (
+              drivers.map((driver) => {
+                const isActiveAndAvailable = isDriverActiveAndAvailable(driver);
+                const driverId = driver.driver_id || (driver as any).id;
+                const driverName = driver['Full name'] || (driver as any).full_name || driverId;
+                return (
+                  <button
+                    key={driverId}
+                    type="button"
+                    onClick={() => {
+                      if (isActiveAndAvailable) {
+                        setSelectedDriverId(driverId);
+                      } else {
+                        toast.error(`Cannot assign ${driverName}. The driver is inactive or unavailable.`);
+                      }
+                    }}
+                    disabled={!isActiveAndAvailable}
+                    className={`w-full p-3 rounded-lg border-2 text-left transition-colors ${
+                      selectedDriverId === driverId
+                        ? 'border-orange-500 bg-orange-50'
+                        : isActiveAndAvailable
+                        ? 'border-gray-200 hover:bg-gray-50 cursor-pointer'
+                        : 'border-gray-200 bg-gray-100 opacity-60 cursor-not-allowed'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">
+                        {driverName}
+                      </span>
+                      <Badge 
+                        variant={isActiveAndAvailable ? 'default' : 'destructive'}
+                      >
+                        {isActiveAndAvailable ? 'active / available' : 'inactive'}
+                      </Badge>
+                    </div>
+                  </button>
+                );
+              })
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => {
-              setShowAssignDriver(false);
-              setSelectedDriverId('');
-            }}>
+            <Button 
+              variant="outline" 
+              onClick={() => {
+                setShowAssignDriver(false);
+                setSelectedDriverId('');
+              }}
+              disabled={isLoading}
+            >
               Cancel
             </Button>
-            <Button onClick={handleAssignDriver} disabled={!selectedDriverId || isLoading}>
-              Assign Driver
+            <Button 
+              onClick={handleAssignDriver} 
+              disabled={!selectedDriverId || isLoading}
+              className="bg-orange-600 hover:bg-orange-700 text-white"
+            >
+              {isLoading ? 'Assigning...' : 'Assign Driver'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Complete Order / Enter Delivery Time Dialog */}
+      <Dialog open={showCompleteOrder} onOpenChange={setShowCompleteOrder}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Complete Order / Enter Delivery Time</DialogTitle>
+            <DialogDescription>
+              Enter the delivery time for order {selectedOrder?.order_id || selectedOrder?.order_number || 'N/A'}. 
+              Delivery will be recorded with the date and time you specify.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div>
+              <Label htmlFor="deliveryDate">Delivery Date</Label>
+              <Input
+                id="deliveryDate"
+                type="date"
+                value={deliveryDate}
+                onChange={(e) => setDeliveryDate(e.target.value)}
+                required
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <Label htmlFor="deliveryTime">Delivery Time</Label>
+              <Input
+                id="deliveryTime"
+                type="time"
+                value={deliveryTime}
+                onChange={(e) => setDeliveryTime(e.target.value)}
+                required
+                className="mt-1"
+              />
+            </div>
+            {deliveryDate && deliveryTime && (
+              <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded">
+                <strong>Delivery will be recorded as:</strong><br />
+                {new Date(`${deliveryDate}T${deliveryTime}`).toLocaleString()}
+              </div>
+            )}
+          </div>
+          <DialogFooter className="bg-white">
+            <Button 
+              variant="outline" 
+              onClick={() => {
+                setShowCompleteOrder(false);
+                setDeliveryDate('');
+                setDeliveryTime('');
+                setSelectedOrder(null);
+              }}
+              disabled={isLoading}
+            >
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleCompleteOrder}
+              disabled={!deliveryDate || !deliveryTime || isLoading}
+              className="bg-black text-white px-4 py-2 rounded-md font-medium hover:bg-gray-900 transition disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isLoading ? 'Completing...' : 'Confirm'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1277,14 +1504,14 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label htmlFor="newPasswordDialog">New password</Label>
+              <Label htmlFor="newPasswordDialog">New password (4-6 digit PIN)</Label>
               <div className="relative">
                 <Input
                   id="newPasswordDialog"
                   type={showNewPassword ? 'text' : 'password'}
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Enter new password"
+                  placeholder="Enter 4-6 digit numeric PIN"
                   className="pr-10"
                 />
                 <button
@@ -1297,14 +1524,14 @@ export function FrontDashStaff({ onNavigateHome, staffUser }: FrontDashStaffProp
               </div>
             </div>
             <div>
-              <Label htmlFor="confirmPasswordDialog">Confirm new password</Label>
+              <Label htmlFor="confirmPasswordDialog">Confirm new password (4-6 digit PIN)</Label>
               <div className="relative">
                 <Input
                   id="confirmPasswordDialog"
                   type={showConfirmPassword ? 'text' : 'password'}
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Re-enter new password"
+                  placeholder="Re-enter 4-6 digit numeric PIN"
                   className="pr-10"
                 />
                 <button

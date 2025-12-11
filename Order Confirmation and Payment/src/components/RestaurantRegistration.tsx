@@ -8,15 +8,21 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Alert, AlertDescription } from './ui/alert';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { Upload, User, Mail, Phone, MapPin, Utensils, Clock, FileText, Image, CheckCircle } from 'lucide-react';
+import { User, Mail, Phone, MapPin, Utensils, Clock, CheckCircle, Plus, X } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
 import { validateEmailSimple as validateEmail, validatePasswordSimple as validatePassword, validatePhoneNumber, validateZipCodeSimple as validateZipCode } from './utils/validation';
 import { createRestaurantRegistration } from '../lib/services/database';
-import { uploadFile } from '../lib/services/storage';
 
 interface RestaurantRegistrationProps {
   onNavigateHome: () => void;
   onNavigateLogin: () => void;
+}
+
+interface MenuItem {
+  name: string;
+  price: string;
+  description: string;
+  is_available: boolean;
 }
 
 interface FormData {
@@ -36,6 +42,12 @@ interface FormData {
   openingTime: string;
   closingTime: string;
   smsOptIn: boolean;
+  menuItems: MenuItem[];
+  operatingHours: {
+    monFri: string;
+    sat: string;
+    sun: string;
+  };
 }
 
 interface FormErrors {
@@ -59,14 +71,18 @@ export function RestaurantRegistration({ onNavigateHome, onNavigateLogin }: Rest
     description: '',
     openingTime: '09:00',
     closingTime: '22:00',
-    smsOptIn: false
+    smsOptIn: false,
+    menuItems: [],
+    operatingHours: {
+      monFri: '',
+      sat: '',
+      sun: ''
+    }
   });
 
   const [errors, setErrors] = useState<FormErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
-  const [menuFile, setMenuFile] = useState<File | null>(null);
-  const [logoFile, setLogoFile] = useState<File | null>(null);
 
   const cuisineTypes = [
     'American', 'Italian', 'Chinese', 'Mexican', 'Indian', 'Japanese', 'Thai', 
@@ -101,12 +117,27 @@ export function RestaurantRegistration({ onNavigateHome, onNavigateLogin }: Rest
     handleInputChange('zipCode', digits);
   };
 
-  const handleFileUpload = (type: 'menu' | 'logo', file: File | null) => {
-    if (type === 'menu') {
-      setMenuFile(file);
-    } else {
-      setLogoFile(file);
-    }
+  const handleAddMenuItem = () => {
+    setFormData(prev => ({
+      ...prev,
+      menuItems: [...prev.menuItems, { name: '', price: '', description: '', is_available: true }]
+    }));
+  };
+
+  const handleRemoveMenuItem = (index: number) => {
+    setFormData(prev => ({
+      ...prev,
+      menuItems: prev.menuItems.filter((_, i) => i !== index)
+    }));
+  };
+
+  const handleMenuItemChange = (index: number, field: keyof MenuItem, value: string | boolean) => {
+    setFormData(prev => ({
+      ...prev,
+      menuItems: prev.menuItems.map((item, i) => 
+        i === index ? { ...item, [field]: value } : item
+      )
+    }));
   };
 
   const validateForm = (): boolean => {
@@ -174,41 +205,44 @@ export function RestaurantRegistration({ onNavigateHome, onNavigateLogin }: Rest
     setIsSubmitting(true);
 
     try {
-      // Upload files to Supabase Storage
-      let menuFileUrl = '';
-      let logoFileUrl = '';
+      // Build full address string
+      const fullAddress = `${formData.address}, ${formData.city}, ${formData.state} ${formData.zipCode}`;
 
-      if (menuFile) {
-        menuFileUrl = await uploadFile('restaurant-documents', menuFile);
-      }
+      // Prepare menu items and operating hours for JSON storage
+      const menuItemsData = formData.menuItems
+        .filter(item => item.name.trim() !== '') // Only include items with names
+        .map(item => ({
+          name: item.name.trim(),
+          price: parseFloat(item.price) || 0,
+          description: item.description.trim() || null,
+          is_available: item.is_available
+        }));
 
-      if (logoFile) {
-        logoFileUrl = await uploadFile('restaurant-logos', logoFile);
-      }
+      const operatingHoursData = {
+        monFri: formData.operatingHours.monFri.trim() || null,
+        sat: formData.operatingHours.sat.trim() || null,
+        sun: formData.operatingHours.sun.trim() || null
+      };
 
-      // Create registration in database
-      // Note: menu_file_url is required in schema, so we'll use empty string if no file uploaded
+      // Create JSON payload for note field
+      const notePayload = {
+        menuItems: menuItemsData,
+        operatingHours: operatingHoursData
+      };
+
+      // Create registration request in database
       await createRestaurantRegistration({
         restaurant_name: formData.restaurantName,
         owner_first_name: formData.firstName,
         owner_last_name: formData.lastName,
         email: formData.email,
         phone: formData.phoneNumber,
-        cuisine_type: formData.cuisineType,
-        address: formData.address,
-        city: formData.city,
-        state: formData.state,
-        zip_code: formData.zipCode,
-        description: formData.description,
-        opening_time: formData.openingTime,
-        closing_time: formData.closingTime,
-        menu_file_url: menuFileUrl || '', // Use empty string if no file uploaded
-        logo_file_url: logoFileUrl || undefined,
-        password: formData.password // Include password for authentication
+        address: fullAddress,
+        note: JSON.stringify(notePayload)
       });
       
       setShowSuccess(true);
-      toast.success('Registration submitted successfully! We will review your application and contact you within 2-3 business days.');
+      toast.success('Thanks! Your restaurant request has been submitted for review.');
       
       // Reset form after successful submission
       setTimeout(() => {
@@ -228,10 +262,14 @@ export function RestaurantRegistration({ onNavigateHome, onNavigateLogin }: Rest
           description: '',
           openingTime: '09:00',
           closingTime: '22:00',
-          smsOptIn: false
+          smsOptIn: false,
+          menuItems: [],
+          operatingHours: {
+            monFri: '',
+            sat: '',
+            sun: ''
+          }
         });
-        setMenuFile(null);
-        setLogoFile(null);
         setShowSuccess(false);
       }, 3000);
 
@@ -509,60 +547,149 @@ export function RestaurantRegistration({ onNavigateHome, onNavigateLogin }: Rest
             </CardContent>
           </Card>
 
-          {/* File Uploads */}
+          {/* Initial Menu (Optional) */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <Upload className="h-5 w-5" />
-                Documents
+                <Utensils className="h-5 w-5" />
+                Initial Menu (Optional)
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div>
-                <Label htmlFor="menuUpload">Upload Menu (Optional)</Label>
-                <div className="mt-2">
-                  <input
-                    id="menuUpload"
-                    type="file"
-                    accept=".pdf,.jpg,.jpeg,.png"
-                    onChange={(e) => handleFileUpload('menu', e.target.files?.[0] || null)}
-                    className="hidden"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => document.getElementById('menuUpload')?.click()}
-                    className="w-full justify-start gap-2"
-                  >
-                    <FileText className="h-4 w-4" />
-                    {menuFile ? menuFile.name : 'Choose menu file'}
-                  </Button>
-                  {errors.menu && <p className="text-red-500 text-sm mt-1">{errors.menu}</p>}
-                  <p className="text-sm text-gray-500 mt-1">PDF, JPG, or PNG format</p>
+              <p className="text-sm text-gray-600 mb-4">
+                Add menu items that will be available when your restaurant is approved. You can add more items later.
+              </p>
+              
+              {formData.menuItems.map((item, index) => (
+                <div key={index} className="border rounded-lg p-4 space-y-3">
+                  <div className="flex justify-between items-center mb-2">
+                    <Label className="text-sm font-medium">Menu Item {index + 1}</Label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleRemoveMenuItem(index)}
+                      className="text-red-600 hover:text-red-700"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <Label htmlFor={`menuName-${index}`}>Name *</Label>
+                      <Input
+                        id={`menuName-${index}`}
+                        value={item.name}
+                        onChange={(e) => handleMenuItemChange(index, 'name', e.target.value)}
+                        placeholder="Item name"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor={`menuPrice-${index}`}>Price ($)</Label>
+                      <Input
+                        id={`menuPrice-${index}`}
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={item.price}
+                        onChange={(e) => handleMenuItemChange(index, 'price', e.target.value)}
+                        placeholder="0.00"
+                      />
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <Label htmlFor={`menuDescription-${index}`}>Description</Label>
+                    <Textarea
+                      id={`menuDescription-${index}`}
+                      value={item.description}
+                      onChange={(e) => handleMenuItemChange(index, 'description', e.target.value)}
+                      placeholder="Item description (optional)"
+                      rows={2}
+                    />
+                  </div>
+                  
+                  <div>
+                    <Label htmlFor={`menuAvailability-${index}`}>Availability</Label>
+                    <Select
+                      value={item.is_available ? 'available' : 'not available'}
+                      onValueChange={(value) => handleMenuItemChange(index, 'is_available', value === 'available')}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="available">Available</SelectItem>
+                        <SelectItem value="not available">Not Available</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
-              </div>
+              ))}
+              
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleAddMenuItem}
+                className="w-full"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Add Menu Item
+              </Button>
+            </CardContent>
+          </Card>
 
+          {/* Operating Hours (Optional) */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Clock className="h-5 w-5" />
+                Operating Hours (Optional)
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-sm text-gray-600 mb-4">
+                Specify your restaurant's operating hours. You can update these later.
+              </p>
+              
               <div>
-                <Label htmlFor="logoUpload">Upload Logo (Optional)</Label>
-                <div className="mt-2">
-                  <input
-                    id="logoUpload"
-                    type="file"
-                    accept=".jpg,.jpeg,.png"
-                    onChange={(e) => handleFileUpload('logo', e.target.files?.[0] || null)}
-                    className="hidden"
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => document.getElementById('logoUpload')?.click()}
-                    className="w-full justify-start gap-2"
-                  >
-                    <Image className="h-4 w-4" />
-                    {logoFile ? logoFile.name : 'Choose logo file'}
-                  </Button>
-                  <p className="text-sm text-gray-500 mt-1">JPG or PNG format recommended</p>
-                </div>
+                <Label htmlFor="monFriHours">Mon–Fri Hours</Label>
+                <Input
+                  id="monFriHours"
+                  value={formData.operatingHours.monFri}
+                  onChange={(e) => setFormData(prev => ({
+                    ...prev,
+                    operatingHours: { ...prev.operatingHours, monFri: e.target.value }
+                  }))}
+                  placeholder="e.g., 9:00 AM - 10:00 PM"
+                />
+              </div>
+              
+              <div>
+                <Label htmlFor="satHours">Saturday Hours</Label>
+                <Input
+                  id="satHours"
+                  value={formData.operatingHours.sat}
+                  onChange={(e) => setFormData(prev => ({
+                    ...prev,
+                    operatingHours: { ...prev.operatingHours, sat: e.target.value }
+                  }))}
+                  placeholder="e.g., 10:00 AM - 11:00 PM"
+                />
+              </div>
+              
+              <div>
+                <Label htmlFor="sunHours">Sunday Hours</Label>
+                <Input
+                  id="sunHours"
+                  value={formData.operatingHours.sun}
+                  onChange={(e) => setFormData(prev => ({
+                    ...prev,
+                    operatingHours: { ...prev.operatingHours, sun: e.target.value }
+                  }))}
+                  placeholder="e.g., 11:00 AM - 9:00 PM"
+                />
               </div>
             </CardContent>
           </Card>
