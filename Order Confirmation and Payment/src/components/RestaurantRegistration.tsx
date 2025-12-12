@@ -10,7 +10,7 @@ import { Alert, AlertDescription } from './ui/alert';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { User, Mail, Phone, MapPin, Utensils, Clock, CheckCircle, Plus, X } from 'lucide-react';
 import { toast } from 'sonner@2.0.3';
-import { validateEmailSimple as validateEmail, validatePasswordSimple as validatePassword, validatePhoneNumber, validateZipCodeSimple as validateZipCode } from './utils/validation';
+import { validateEmailSimple as validateEmail, validatePhoneNumber, validateZipCodeSimple as validateZipCode } from './utils/validation';
 import { createRestaurantRegistration } from '../lib/services/database';
 
 interface RestaurantRegistrationProps {
@@ -29,8 +29,6 @@ interface FormData {
   firstName: string;
   lastName: string;
   email: string;
-  password: string;
-  confirmPassword: string;
   phoneNumber: string;
   restaurantName: string;
   cuisineType: string;
@@ -59,8 +57,6 @@ export function RestaurantRegistration({ onNavigateHome, onNavigateLogin }: Rest
     firstName: '',
     lastName: '',
     email: '',
-    password: '',
-    confirmPassword: '',
     phoneNumber: '',
     restaurantName: '',
     cuisineType: '',
@@ -160,20 +156,6 @@ export function RestaurantRegistration({ onNavigateHome, onNavigateLogin }: Rest
       newErrors.email = 'Please enter a valid email address';
     }
 
-    // Password validation
-    if (!formData.password) {
-      newErrors.password = 'Password is required';
-    } else if (!validatePassword(formData.password)) {
-      newErrors.password = 'Password must contain at least 8 characters with uppercase, lowercase, and numbers';
-    }
-
-    // Confirm password validation
-    if (!formData.confirmPassword) {
-      newErrors.confirmPassword = 'Please confirm your password';
-    } else if (formData.password !== formData.confirmPassword) {
-      newErrors.confirmPassword = 'Passwords do not match';
-    }
-
     // Phone number validation
     if (!formData.phoneNumber) {
       newErrors.phoneNumber = 'Phone number is required';
@@ -250,8 +232,6 @@ export function RestaurantRegistration({ onNavigateHome, onNavigateLogin }: Rest
           firstName: '',
           lastName: '',
           email: '',
-          password: '',
-          confirmPassword: '',
           phoneNumber: '',
           restaurantName: '',
           cuisineType: '',
@@ -365,34 +345,6 @@ export function RestaurantRegistration({ onNavigateHome, onNavigateLogin }: Rest
                   className={errors.email ? 'border-red-500' : ''}
                 />
                 {errors.email && <p className="text-red-500 text-sm mt-1">{errors.email}</p>}
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="password">Password *</Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    value={formData.password}
-                    onChange={(e) => handleInputChange('password', e.target.value)}
-                    placeholder="Create password"
-                    className={errors.password ? 'border-red-500' : ''}
-                  />
-                  {errors.password && <p className="text-red-500 text-sm mt-1">{errors.password}</p>}
-                  <p className="text-sm text-gray-500 mt-1">Must contain uppercase, lowercase, and numbers</p>
-                </div>
-                <div>
-                  <Label htmlFor="confirmPassword">Confirm Password *</Label>
-                  <Input
-                    id="confirmPassword"
-                    type="password"
-                    value={formData.confirmPassword}
-                    onChange={(e) => handleInputChange('confirmPassword', e.target.value)}
-                    placeholder="Confirm password"
-                    className={errors.confirmPassword ? 'border-red-500' : ''}
-                  />
-                  {errors.confirmPassword && <p className="text-red-500 text-sm mt-1">{errors.confirmPassword}</p>}
-                </div>
               </div>
 
               <div>

@@ -497,10 +497,91 @@ function parseNoteData(note: string | null): { city: string; state: string; zip:
   return result;
 }
 
+// Helper function to convert registration operating hours format to WeeklyHours format
+function convertRegistrationHoursToWeeklyHours(operatingHours: { monFri?: string; sat?: string; sun?: string } | null): string | null {
+  if (!operatingHours || (!operatingHours.monFri && !operatingHours.sat && !operatingHours.sun)) {
+    return null;
+  }
+  
+  // Default WeeklyHours structure
+  const defaultHours = {
+    monday: { isOpen: false, openTime: '09:00', closeTime: '21:00' },
+    tuesday: { isOpen: false, openTime: '09:00', closeTime: '21:00' },
+    wednesday: { isOpen: false, openTime: '09:00', closeTime: '21:00' },
+    thursday: { isOpen: false, openTime: '09:00', closeTime: '21:00' },
+    friday: { isOpen: false, openTime: '09:00', closeTime: '21:00' },
+    saturday: { isOpen: false, openTime: '09:00', closeTime: '21:00' },
+    sunday: { isOpen: false, openTime: '09:00', closeTime: '21:00' }
+  };
+
+  // Helper to parse time range like "9:00 AM - 10:00 PM"
+  const parseTimeRange = (timeStr: string): { openTime: string; closeTime: string } | null => {
+    if (!timeStr || !timeStr.trim()) return null;
+    
+    const match = timeStr.match(/(\d{1,2}):(\d{2})\s*(AM|PM)\s*[-–]\s*(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+    if (!match) return null;
+
+    const to24Hour = (hour: number, minute: string, ampm: string): string => {
+      let h = parseInt(hour.toString(), 10);
+      if (ampm.toUpperCase() === 'PM' && h !== 12) h += 12;
+      if (ampm.toUpperCase() === 'AM' && h === 12) h = 0;
+      return `${h.toString().padStart(2, '0')}:${minute}`;
+    };
+
+    const openTime = to24Hour(parseInt(match[1], 10), match[2], match[3]);
+    const closeTime = to24Hour(parseInt(match[4], 10), match[5], match[6]);
+    
+    return { openTime, closeTime };
+  };
+
+  // Apply Mon-Fri hours
+  if (operatingHours.monFri) {
+    const hours = parseTimeRange(operatingHours.monFri);
+    if (hours) {
+      ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'].forEach(day => {
+        defaultHours[day as keyof typeof defaultHours] = {
+          isOpen: true,
+          openTime: hours.openTime,
+          closeTime: hours.closeTime
+        };
+      });
+    }
+  }
+
+  // Apply Saturday hours
+  if (operatingHours.sat) {
+    const hours = parseTimeRange(operatingHours.sat);
+    if (hours) {
+      defaultHours.saturday = {
+        isOpen: true,
+        openTime: hours.openTime,
+        closeTime: hours.closeTime
+      };
+    }
+  }
+
+  // Apply Sunday hours
+  if (operatingHours.sun) {
+    const hours = parseTimeRange(operatingHours.sun);
+    if (hours) {
+      defaultHours.sunday = {
+        isOpen: true,
+        openTime: hours.openTime,
+        closeTime: hours.closeTime
+      };
+    }
+  }
+
+  return serializeOperatingHours(defaultHours as any);
+}
+
 // Helper function to create restaurant from approved request
 // Returns the generated credentials
 async function createRestaurantFromRequest(request: any): Promise<{ username: string; password: string; restaurantName: string }> {
-  // Parse data from note field (includes username)
+  // Parse JSON note data (menuItems and operatingHours)
+  const noteJson = parseRequestNote(request.note);
+  
+  // Parse data from note field (includes username) - for backward compatibility
   const noteData = parseNoteData(request.note);
   
   // Get restaurant name
@@ -574,6 +655,15 @@ async function createRestaurantFromRequest(request: any): Promise<{ username: st
     passwordHash = generatedPIN;
   }
 
+  // Convert operating hours from registration format to WeeklyHours JSON format
+  let operatingHoursJson: string | null = null;
+  if (noteJson?.operatingHours) {
+    operatingHoursJson = convertRegistrationHoursToWeeklyHours(noteJson.operatingHours);
+  } else if (noteData.operatingHours) {
+    // Fallback to old format if available
+    operatingHoursJson = noteData.operatingHours;
+  }
+
   // Prepare update data (only set password_hash if we generated a new PIN)
   const updateData: any = {
     registration_status: 'approved',
@@ -587,7 +677,7 @@ async function createRestaurantFromRequest(request: any): Promise<{ username: st
     city: noteData.city || null,
     state: noteData.state || null,
     zip: noteData.zip || null,
-    operating_hours: noteData.operatingHours || null
+    operating_hours: operatingHoursJson
   };
 
   // Only set password_hash if we generated a new PIN (i.e., it was NULL before)
@@ -653,6 +743,63 @@ async function createRestaurantFromRequest(request: any): Promise<{ username: st
       }
     } else {
       throw new Error(`Failed to save restaurant: ${restaurantError.message}`);
+    }
+  }
+  
+  // Insert menu items if they exist in the registration data
+  if (noteJson?.menuItems && Array.isArray(noteJson.menuItems) && noteJson.menuItems.length > 0) {
+    try {
+      // Get existing menu items for this restaurant to determine the next menu_item_id
+      const { data: existingMenuItems } = await supabase
+        .from('menu_items')
+        .select('menu_item_id')
+        .eq('restaurant_id', restaurantId)
+        .order('menu_item_id', { ascending: false })
+        .limit(1);
+
+      // Determine starting menu_item_id (use "01", "02", etc. - sequential within restaurant)
+      let nextItemId = 1;
+      if (existingMenuItems && existingMenuItems.length > 0) {
+        const lastId = existingMenuItems[0].menu_item_id;
+        if (lastId) {
+          // Extract number from last ID - handle both "01" format and "REST001-01" format
+          const match = lastId.match(/(\d+)$/); // Match last sequence of digits
+          if (match) {
+            nextItemId = parseInt(match[1], 10) + 1;
+          }
+        }
+      }
+
+      // Prepare menu items for insertion
+      const menuItemsToInsert = noteJson.menuItems.map((item: any, index: number) => {
+        const menuItemId = (nextItemId + index).toString().padStart(2, '0');
+        // Use format: restaurantId-menuItemId (e.g., "REST001-01") to ensure global uniqueness
+        // If the database uses composite keys, this will still work fine
+        return {
+          menu_item_id: `${restaurantId}-${menuItemId}`,
+          restaurant_id: restaurantId,
+          name: item.name || '',
+          price: item.price || 0,
+          description: item.description || null,
+          is_available: item.is_available !== false // Default to true if not specified
+        };
+      });
+
+      // Insert menu items
+      const { error: menuError } = await supabase
+        .from('menu_items')
+        .insert(menuItemsToInsert);
+
+      if (menuError) {
+        console.error('Error inserting menu items:', menuError);
+        // Don't throw - restaurant was created successfully, menu items are optional
+        console.warn('Restaurant created but menu items could not be inserted. They can be added manually.');
+      } else {
+        console.log(`Successfully inserted ${menuItemsToInsert.length} menu items for restaurant ${restaurantId}`);
+      }
+    } catch (menuError) {
+      console.error('Exception inserting menu items:', menuError);
+      // Don't throw - restaurant was created successfully
     }
   }
   

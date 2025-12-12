@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { validateEmail, validatePhone, formatPhone } from './utils/validation';
 import { useMenuItems } from '../lib/utils/hooks';
-import { getRestaurants, getOrdersByRestaurant, confirmOrder, createWithdrawalRequest, updateRestaurantOperatingHours, getRestaurantByUsername, updateRestaurantPassword } from '../lib/services/database';
+import { getRestaurants, getOrdersByRestaurant, confirmOrder, createWithdrawalRequest, updateRestaurantOperatingHours, getRestaurantByUsername, updateRestaurantPassword, getMenuItemsByRestaurant } from '../lib/services/database';
 import { supabase } from '../lib/supabase';
 import { toast } from 'sonner@2.0.3';
 import { Loader2, CheckCircle2 } from 'lucide-react';
@@ -377,14 +377,80 @@ export function RestaurantInterface({ onNavigateHome, restaurantId }: Restaurant
     // Description is optional
   };
 
-  const addMenuItem = () => {
+  const addMenuItem = async () => {
     if (editingItem && editingItem.id === 0 && validateMenuItem(editingItem)) {
-      const id = Math.max(...menuItems.map(item => item.id), 0) + 1;
-      setMenuItems([...menuItems, { ...editingItem, id } as MenuItem]);
-      setEditingItem(null);
-      alert('Menu item added successfully!');
+      if (!restaurantId) {
+        toast.error('Restaurant ID not found. Cannot add menu item.');
+        return;
+      }
+
+      try {
+        // Get existing menu items for this restaurant to determine the next menu_item_id
+        const { data: existingMenuItems } = await supabase
+          .from('menu_items')
+          .select('menu_item_id')
+          .eq('restaurant_id', restaurantId)
+          .order('menu_item_id', { ascending: false })
+          .limit(1);
+
+        // Determine starting menu_item_id (use "01", "02", etc. - sequential within restaurant)
+        let nextItemId = 1;
+        if (existingMenuItems && existingMenuItems.length > 0) {
+          const lastId = existingMenuItems[0].menu_item_id;
+          if (lastId) {
+            // Extract number from last ID - handle both "01" format and "REST001-01" format
+            const match = lastId.match(/(\d+)$/); // Match last sequence of digits
+            if (match) {
+              nextItemId = parseInt(match[1], 10) + 1;
+            }
+          }
+        }
+
+        const menuItemId = nextItemId.toString().padStart(2, '0');
+        const fullMenuItemId = `${restaurantId}-${menuItemId}`;
+
+        // Insert into database
+        const { data: newMenuItem, error } = await supabase
+          .from('menu_items')
+          .insert([{
+            menu_item_id: fullMenuItemId,
+            restaurant_id: restaurantId,
+            name: editingItem.name,
+            price: editingItem.price,
+            description: editingItem.description || null,
+            is_available: editingItem.availability === 'available'
+          }])
+          .select()
+          .single();
+
+        if (error) {
+          console.error('Error adding menu item to database:', error);
+          toast.error('Failed to add menu item to database');
+          return;
+        }
+
+        // Refresh menu items from database to ensure we have the latest data
+        const refreshedMenuItems = await getMenuItemsByRestaurant(restaurantId);
+        
+        // Map refreshed items to component format
+        const mappedItems: MenuItem[] = refreshedMenuItems.map((item, index) => ({
+          id: index + 1,
+          menu_item_id: item.menu_item_id || item.id,
+          name: item.name || 'Menu Item',
+          price: item.price || 0,
+          description: item.description || '',
+          availability: item.is_available !== false ? 'available' : 'unavailable'
+        }));
+        
+        setMenuItems(mappedItems);
+        setEditingItem(null);
+        toast.success('Menu item added successfully!');
+      } catch (error) {
+        console.error('Exception adding menu item:', error);
+        toast.error('Failed to add menu item');
+      }
     } else {
-      alert('Please fill in all required fields (Name, Price)');
+      toast.error('Please fill in all required fields (Name, Price)');
     }
   };
 
