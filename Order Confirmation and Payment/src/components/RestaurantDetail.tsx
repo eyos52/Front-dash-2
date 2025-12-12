@@ -26,6 +26,7 @@ interface MenuItem {
   image?: string;
   category: string;
   isPopular?: boolean;
+  is_available?: boolean;
 }
 
 interface Restaurant {
@@ -155,21 +156,71 @@ export function RestaurantDetail({
   // Map Supabase menu items to component format
   const mappedMenuItems: MenuItem[] = useMemo(() => {
     if (supabaseMenuItems.length > 0) {
-      return supabaseMenuItems.map((item, index) => ({
-        id: index + 1, // Use index for component compatibility
-        name: item.name || 'Menu Item',
-        description: item.description || '',
-        price: item.price || 0,
-        image: item.image_url || restaurant.image,
-        category: item.category || 'featured',
-        isPopular: false // You can add a field for this in your database if needed
-      }));
+      console.log('[RestaurantDetail] Raw Supabase menu items:', supabaseMenuItems);
+      
+      return supabaseMenuItems.map((item, index) => {
+        // Handle is_available: treat as unavailable only if explicitly false
+        // Default to true for null, undefined, or true
+        // Handle both boolean false and string "false" from database
+        const rawValue = item.is_available;
+        
+        // Explicit check: default to true, only set to false if explicitly false
+        // Handle various possible representations of false from database
+        let isAvailable = true; // Default to available
+        const rawStr = String(rawValue).toLowerCase().trim();
+        if (
+          rawValue === false || 
+          rawValue === 'false' || 
+          rawValue === 0 || 
+          rawValue === '0' ||
+          rawStr === 'false' ||
+          rawStr === '0'
+        ) {
+          isAvailable = false; // Only false if explicitly false in database
+        }
+        // If rawValue is true, 'true', 1, '1', null, or undefined, isAvailable stays true
+        
+        // Debug logging for ALL items
+        console.log(`[Menu Item Mapping] "${item.name}" (${item.menu_item_id || 'no-id'}):`, {
+          rawValue,
+          rawValueType: typeof rawValue,
+          isAvailable,
+          itemData: item
+        });
+        
+        return {
+          id: index + 1, // Use index for component compatibility
+          name: item.name || 'Menu Item',
+          description: item.description || '',
+          price: item.price || 0,
+          image: item.image_url || restaurant.image,
+          category: item.category || 'featured',
+          isPopular: false, // You can add a field for this in your database if needed
+          is_available: isAvailable
+        };
+      });
     }
     return [];
   }, [supabaseMenuItems, restaurant.image]);
 
   // Use menu items from database only
   const menuItems = mappedMenuItems;
+
+  // Safety check: Remove unavailable items from cart when menu items load
+  useEffect(() => {
+    if (menuItems.length > 0 && cart.items.length > 0) {
+      const unavailableItems = menuItems.filter(item => !item.is_available);
+      const unavailableIds = unavailableItems.map(item => item.id);
+      const itemsToRemove = cart.items.filter(cartItem => unavailableIds.includes(cartItem.id));
+      
+      if (itemsToRemove.length > 0) {
+        console.warn('[RestaurantDetail] Removing unavailable items from cart:', itemsToRemove.map(i => i.name));
+        itemsToRemove.forEach(item => {
+          removeFromCart(item.id);
+        });
+      }
+    }
+  }, [menuItems, cart.items, removeFromCart]);
 
   // Dynamic categories based on actual menu items from database
   const getCategoriesForStore = () => {
@@ -221,6 +272,40 @@ export function RestaurantDetail({
   }, [menuItems, selectedCategory]);
 
   const handleAddToCart = (item: MenuItem) => {
+    console.log('[handleAddToCart] Attempting to add item:', {
+      name: item.name,
+      id: item.id,
+      is_available: item.is_available,
+      is_available_type: typeof item.is_available,
+      fullItem: item
+    });
+    
+    // STRICT CHECK: Block if is_available is false, null, undefined, or any falsy value
+    // Check both the boolean false and any string/number representations
+    const isUnavailable = 
+      item.is_available === false || 
+      item.is_available === null || 
+      item.is_available === undefined ||
+      item.is_available === 0 ||
+      item.is_available === 'false' ||
+      item.is_available === '0' ||
+      String(item.is_available).toLowerCase().trim() === 'false' ||
+      !item.is_available; // Catch any other falsy values
+    
+    if (isUnavailable) {
+      console.error('[handleAddToCart] BLOCKED: Item is unavailable', {
+        itemName: item.name,
+        is_available: item.is_available,
+        is_availableType: typeof item.is_available,
+        isUnavailable,
+        reason: 'Item is marked as unavailable in database'
+      });
+      alert(`"${item.name}" is currently unavailable and cannot be added to your cart.`);
+      return;
+    }
+    
+    console.log('[handleAddToCart] ALLOWED: Item is available, proceeding to add to cart');
+    
     // Check if restaurant is open before allowing add to cart
     if (!isRestaurantOpen()) {
       alert(`${restaurant.name} is currently closed. Hours: ${restaurant.openingTime} - ${restaurant.closingTime}`);
@@ -406,17 +491,38 @@ export function RestaurantDetail({
                     <div className="flex-1 p-4">
                       <div className="flex items-start justify-between mb-2">
                         <h3 className="font-semibold text-lg">{item.name}</h3>
-                        {item.isPopular && (
-                          <Badge variant="secondary" className="bg-orange-100 text-orange-600 border-orange-200">
-                            Popular
-                          </Badge>
-                        )}
+                        <div className="flex gap-2">
+                          {!item.is_available && (
+                            <Badge variant="secondary" className="bg-gray-100 text-gray-600 border-gray-200">
+                              Unavailable
+                            </Badge>
+                          )}
+                          {item.isPopular && (
+                            <Badge variant="secondary" className="bg-orange-100 text-orange-600 border-orange-200">
+                              Popular
+                            </Badge>
+                          )}
+                        </div>
                       </div>
                       <p className="text-gray-600 text-sm mb-3 line-clamp-2">{item.description}</p>
                       <div className="flex items-center justify-between">
                         <span className="font-bold text-lg">${item.price.toFixed(2)}</span>
                         <div className="flex items-center gap-2">
-                          {getCartItemQuantity(item.id) > 0 ? (
+                          {!item.is_available ? (
+                            <Button
+                              size="sm"
+                              disabled
+                              className="gap-1 bg-gray-300 text-gray-500 cursor-not-allowed"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                alert('This item is currently unavailable.');
+                              }}
+                            >
+                              <Plus className="h-3 w-3" />
+                              Unavailable
+                            </Button>
+                          ) : getCartItemQuantity(item.id) > 0 ? (
                             <div className="flex items-center gap-2">
                               <Button
                                 size="sm"
@@ -431,8 +537,18 @@ export function RestaurantDetail({
                               </span>
                               <Button
                                 size="sm"
-                                onClick={() => handleAddToCart(item)}
-                                className="h-8 w-8 p-0 bg-orange-500 hover:bg-orange-600"
+                                onClick={(e) => {
+                                  if (!item.is_available) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    alert('This item is currently unavailable.');
+                                    return;
+                                  }
+                                  handleAddToCart(item);
+                                }}
+                                disabled={!item.is_available}
+                                className={`h-8 w-8 p-0 ${!item.is_available ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-orange-500 hover:bg-orange-600'}`}
+                                title={!item.is_available ? 'Item is unavailable' : ''}
                               >
                                 <Plus className="h-3 w-3" />
                               </Button>
@@ -440,11 +556,20 @@ export function RestaurantDetail({
                           ) : (
                             <Button
                               size="sm"
-                              onClick={() => handleAddToCart(item)}
-                              className="gap-1 bg-orange-500 hover:bg-orange-600"
+                              onClick={(e) => {
+                                if (!item.is_available) {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  alert('This item is currently unavailable.');
+                                  return;
+                                }
+                                handleAddToCart(item);
+                              }}
+                              disabled={!item.is_available}
+                              className={`gap-1 ${!item.is_available ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-orange-500 hover:bg-orange-600'}`}
                             >
                               <Plus className="h-3 w-3" />
-                              Add
+                              {!item.is_available ? 'Unavailable' : 'Add'}
                             </Button>
                           )}
                         </div>
